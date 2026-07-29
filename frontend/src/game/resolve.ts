@@ -87,6 +87,8 @@ function lineCells(start: Vec2, end: Vec2): Vec2[] {
 
 export interface KickResult {
   restingPos: Vec2;
+  /** Cells the ball actually crosses, in order, ending at restingPos — used to animate its flight. */
+  path: Vec2[];
   receiver: Pawn | null;
   interceptedBy: Pawn | null;
   goal: Side | null;
@@ -107,14 +109,17 @@ function resolveKick(carrier: Pawn, rawTarget: Vec2, pawns: Pawn[]): KickResult 
     x: Math.round(carrier.pos.x + (rawTarget.x - carrier.pos.x) * clampFraction),
     y: Math.round(carrier.pos.y + (rawTarget.y - carrier.pos.y) * clampFraction),
   };
-  const path = lineCells(carrier.pos, target);
+  const fullPath = lineCells(carrier.pos, target);
+  const traveled: Vec2[] = [];
 
-  for (const cell of path) {
+  for (const cell of fullPath) {
+    traveled.push(cell);
     const occupant = pawns.find((p) => p.id !== carrier.id && key(p.pos) === key(cell));
     if (occupant) {
       if (occupant.side === carrier.side) {
         return {
           restingPos: cell,
+          path: [...traveled],
           receiver: occupant,
           interceptedBy: null,
           goal: null,
@@ -126,6 +131,7 @@ function resolveKick(carrier: Pawn, rawTarget: Vec2, pawns: Pawn[]): KickResult 
       if (defenseRoll > kickRoll) {
         return {
           restingPos: cell,
+          path: [...traveled],
           receiver: null,
           interceptedBy: occupant,
           goal: null,
@@ -139,6 +145,7 @@ function resolveKick(carrier: Pawn, rawTarget: Vec2, pawns: Pawn[]): KickResult 
     if (goal) {
       return {
         restingPos: cell,
+        path: [...traveled],
         receiver: null,
         interceptedBy: null,
         goal,
@@ -147,9 +154,10 @@ function resolveKick(carrier: Pawn, rawTarget: Vec2, pawns: Pawn[]): KickResult 
     }
   }
 
-  const finalCell = path[path.length - 1] ?? carrier.pos;
+  const finalCell = fullPath[fullPath.length - 1] ?? carrier.pos;
   return {
     restingPos: finalCell,
+    path: traveled.length > 0 ? traveled : [finalCell],
     receiver: null,
     interceptedBy: null,
     goal: null,
@@ -171,25 +179,36 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   // there, the ball just sits still until someone reaches it next turn.
   const carrier = current.find((p) => key(p.pos) === key(ball.pos)) ?? null;
   let ballPos: Vec2 = { ...ball.pos };
-  let kickedThisTurn = false;
+  let kickBallTicks: Vec2[] | null = null;
 
   if (carrier && carrier.plannedKick) {
     const kick = resolveKick(carrier, carrier.plannedKick, current);
     events.push(kick.event);
-    ballPos = kick.restingPos;
-    kickedThisTurn = true;
     // The kicker releases the ball and stays put; nobody else's plan changes.
     current = current.map((p) =>
       p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null } : p
     );
 
+    // Spread the flight across the same number of ticks pawns use to move,
+    // so the ball is seen travelling instead of teleporting straight to its
+    // resting cell on the very first frame.
+    const flight = kick.path.length > 0 ? kick.path : [kick.restingPos];
+    kickBallTicks = [];
+    for (let t = 0; t < MOVE_RANGE; t++) {
+      const idx = Math.min(flight.length - 1, Math.round(((t + 1) / MOVE_RANGE) * (flight.length - 1)));
+      kickBallTicks.push(flight[idx]);
+    }
+    ballPos = kick.restingPos;
+
     if (kick.goal) {
-      const finalPawns = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
-      return {
-        snapshots: [{ pawns: finalPawns, ball: ballPos }],
-        events,
-        goal: kick.goal,
-      };
+      // Play stops the instant the ball crosses the line — everyone else
+      // freezes while the ball finishes its flight into the net.
+      const frozenPawns = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+      const goalSnapshots = kickBallTicks.map((pos) => ({
+        pawns: frozenPawns.map((p) => ({ ...p })),
+        ball: { ...pos },
+      }));
+      return { snapshots: goalSnapshots, events, goal: kick.goal };
     }
   }
 
@@ -293,7 +312,9 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     }
 
     current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedPos: null }));
-    if (carrier && !kickedThisTurn) {
+    if (kickBallTicks) {
+      ballPos = { ...kickBallTicks[tick] };
+    } else if (carrier) {
       ballPos = { ...current.find((p) => p.id === carrier.id)!.pos };
     }
     snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
