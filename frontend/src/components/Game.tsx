@@ -46,6 +46,8 @@ export function Game({ onExitToMenu }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
   const [controllingSide, setControllingSide] = useState<"home" | "away">("home");
+  const [readySides, setReadySides] = useState<Set<"home" | "away">>(new Set());
+  const [handoff, setHandoff] = useState(false);
   const [turn, setTurn] = useState(1);
   const [homeScore, setHomeScore] = useState(0);
   const [awayScore, setAwayScore] = useState(0);
@@ -86,13 +88,6 @@ export function Game({ onExitToMenu }: Props) {
     }
     return cells;
   }, [selectedPawn, kickMode, selectedIsCarrier]);
-
-  function handleSwitchSide(side: "home" | "away") {
-    if (resolving) return;
-    setControllingSide(side);
-    setSelectedId(null);
-    setKickMode(false);
-  }
 
   function handlePawnClick(pawn: Pawn) {
     if (resolving || matchOver) return;
@@ -154,7 +149,30 @@ export function Game({ onExitToMenu }: Props) {
     }
 
     setTurn((t) => t + 1);
+    setReadySides(new Set());
+    setControllingSide("home");
     setResolving(false);
+  }
+
+  async function handleReady() {
+    if (resolving || matchOver) return;
+    setSelectedId(null);
+    setKickMode(false);
+
+    const next = new Set(readySides);
+    next.add(controllingSide);
+    setReadySides(next);
+
+    if (next.size < 2) {
+      setHandoff(true);
+    } else {
+      await handleProceed();
+    }
+  }
+
+  function handleContinueHandoff() {
+    setControllingSide((side) => (side === "home" ? "away" : "home"));
+    setHandoff(false);
   }
 
   const cells = [];
@@ -186,6 +204,26 @@ export function Game({ onExitToMenu }: Props) {
     else resultText = "Empate!";
   }
 
+  if (handoff) {
+    const nextSideName = controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
+    return (
+      <div className="game-wrapper handoff-screen">
+        <h2>Passe o computador</h2>
+        <p>
+          Agora é a vez do <strong>{nextSideName}</strong> planejar seus movimentos.
+        </p>
+        <button type="button" onClick={handleContinueHandoff}>
+          Continuar
+        </button>
+      </div>
+    );
+  }
+
+  const controllingSideName = controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
+  const visiblePawns = pawns.map((p) =>
+    p.side === controllingSide ? p : { ...p, plannedPos: null, plannedKick: null }
+  );
+
   return (
     <div className="game-wrapper">
       <div className="game-header">
@@ -201,35 +239,21 @@ export function Game({ onExitToMenu }: Props) {
           <span>
             Turno {Math.min(turn, TOTAL_TURNS)} / {TOTAL_TURNS}
           </span>
-          <button type="button" onClick={handleProceed} disabled={resolving || matchOver}>
-            {resolving ? "Resolvendo..." : "Prosseguir"}
+          <button type="button" onClick={handleReady} disabled={resolving || matchOver}>
+            {resolving ? "Resolvendo..." : "Pronto"}
           </button>
         </div>
       </div>
-      <div className="side-toggle">
-        <span>Controlando:</span>
-        <button
-          type="button"
-          className={controllingSide === "home" ? "active home" : "home"}
-          onClick={() => handleSwitchSide("home")}
-        >
-          {teams[0]?.name}
-        </button>
-        <button
-          type="button"
-          className={controllingSide === "away" ? "active away" : "away"}
-          onClick={() => handleSwitchSide("away")}
-        >
-          {teams[1]?.name}
-        </button>
-      </div>
+      {!matchOver && (
+        <p className={`turn-indicator ${controllingSide}`}>Vez de: {controllingSideName}</p>
+      )}
       {matchOver ? (
         <p className="result-banner">{resultText}</p>
       ) : (
         <p className="hint">
           Clique em um peão do time em controle e depois em uma casa destacada para planejar o
-          movimento. Quem estiver em cima da bola a carrega ao se mover. Passe o computador pro
-          outro jogador (ou troque acima) antes de clicar em "Prosseguir".
+          movimento. Quem estiver em cima da bola a carrega ao se mover. Clique em "Pronto" quando
+          terminar de planejar — o outro time não vê suas jogadas até a resolução.
         </p>
       )}
       {selectedIsCarrier && !matchOver && (
@@ -265,7 +289,7 @@ export function Game({ onExitToMenu }: Props) {
         <Field />
         {cells}
         <BallView ball={ball} />
-        {pawns.map((pawn) => (
+        {visiblePawns.map((pawn) => (
           <PawnView
             key={pawn.id}
             pawn={pawn}

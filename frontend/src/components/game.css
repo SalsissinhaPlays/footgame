@@ -22,35 +22,35 @@
   cursor: pointer;
 }
 
-.side-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #444;
-  margin-bottom: 10px;
+.turn-indicator {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 4px 0;
 }
 
-.side-toggle button {
-  padding: 5px 14px;
-  font-size: 13px;
+.turn-indicator.home {
+  color: #1565c0;
+}
+
+.turn-indicator.away {
+  color: #c62828;
+}
+
+.handoff-screen {
+  text-align: center;
+  padding-top: 80px;
+}
+
+.handoff-screen button {
+  margin-top: 16px;
+  padding: 10px 24px;
+  font-size: 15px;
   font-weight: 600;
-  border-radius: 5px;
-  border: 1px solid #999;
-  background: white;
+  border-radius: 6px;
+  border: none;
+  background: #2e7d32;
+  color: white;
   cursor: pointer;
-}
-
-.side-toggle button.active.home {
-  background: #1565c0;
-  border-color: #1565c0;
-  color: white;
-}
-
-.side-toggle button.active.away {
-  background: #c62828;
-  border-color: #c62828;
-  color: white;
 }
 
 .game-header h1 {
