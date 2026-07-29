@@ -1,4 +1,4 @@
-import { GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, MOVE_RANGE } from "./constants";
+import { GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, KICK_RANGE, MOVE_RANGE } from "./constants";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
 
 export interface ResolveSnapshot {
@@ -59,6 +59,98 @@ function pickWinner(contestants: Pawn[]): Pawn {
   return best;
 }
 
+/** Grid cells crossed in a straight line from `start` to `end`, excluding `start`. */
+function lineCells(start: Vec2, end: Vec2): Vec2[] {
+  const dist = Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y), 1);
+  const cells: Vec2[] = [];
+  let lastKey: string | null = null;
+  for (let i = 1; i <= dist; i++) {
+    const fraction = i / dist;
+    const cell = {
+      x: Math.round(start.x + (end.x - start.x) * fraction),
+      y: Math.round(start.y + (end.y - start.y) * fraction),
+    };
+    const cellKey = key(cell);
+    if (cellKey !== lastKey) {
+      cells.push(cell);
+      lastKey = cellKey;
+    }
+  }
+  return cells;
+}
+
+export interface KickResult {
+  restingPos: Vec2;
+  receiver: Pawn | null;
+  interceptedBy: Pawn | null;
+  goal: Side | null;
+  event: string;
+}
+
+/**
+ * A kicked ball travels in a straight line from the carrier toward the target
+ * (clamped to KICK_RANGE) using the pawns' positions at the start of the turn.
+ * It stops at the first occupied cell it crosses — an opponent there gets a
+ * chance to intercept, a teammate simply receives the pass — or at the goal
+ * mouth, or at the end of its range if the lane is clear.
+ */
+function resolveKick(carrier: Pawn, rawTarget: Vec2, pawns: Pawn[]): KickResult {
+  const dist = Math.max(Math.abs(rawTarget.x - carrier.pos.x), Math.abs(rawTarget.y - carrier.pos.y));
+  const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
+  const target: Vec2 = {
+    x: Math.round(carrier.pos.x + (rawTarget.x - carrier.pos.x) * clampFraction),
+    y: Math.round(carrier.pos.y + (rawTarget.y - carrier.pos.y) * clampFraction),
+  };
+  const path = lineCells(carrier.pos, target);
+
+  for (const cell of path) {
+    const occupant = pawns.find((p) => p.id !== carrier.id && key(p.pos) === key(cell));
+    if (occupant) {
+      if (occupant.side === carrier.side) {
+        return {
+          restingPos: cell,
+          receiver: occupant,
+          interceptedBy: null,
+          goal: null,
+          event: `Passe: ${carrier.player.name} encontra ${occupant.player.name}`,
+        };
+      }
+      const kickRoll = skillCheckRoll(carrier);
+      const defenseRoll = skillCheckRoll(occupant);
+      if (defenseRoll > kickRoll) {
+        return {
+          restingPos: cell,
+          receiver: null,
+          interceptedBy: occupant,
+          goal: null,
+          event: `Interceptação: ${occupant.player.name} corta o chute de ${carrier.player.name}`,
+        };
+      }
+      // Kick breaks through this defender — keep travelling the rest of the path.
+    }
+
+    const goal = goalScoredAt(cell);
+    if (goal) {
+      return {
+        restingPos: cell,
+        receiver: null,
+        interceptedBy: null,
+        goal,
+        event: goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!",
+      };
+    }
+  }
+
+  const finalCell = path[path.length - 1] ?? carrier.pos;
+  return {
+    restingPos: finalCell,
+    receiver: null,
+    interceptedBy: null,
+    goal: null,
+    event: `${carrier.player.name} chuta a bola para (${finalCell.x},${finalCell.y})`,
+  };
+}
+
 /**
  * Resolves one full turn tick by tick. Invariant that must never break:
  * no two pawns may occupy the same cell in any snapshot. Collisions are
@@ -67,16 +159,38 @@ function pickWinner(contestants: Pawn[]): Pawn {
 export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   const events: string[] = [];
   let current: Pawn[] = pawns.map((p) => ({ ...p }));
-  const paths = new Map(
-    current.map((p) => [p.id, lerpPath(p.pos, p.plannedPos ?? p.pos, MOVE_RANGE)])
-  );
-  const stopped = new Set<string>();
   const snapshots: ResolveSnapshot[] = [];
 
   // Whoever starts the turn standing on the ball carries it. If nobody is
   // there, the ball just sits still until someone reaches it next turn.
-  const carrierId = current.find((p) => key(p.pos) === key(ball.pos))?.id ?? null;
+  const carrier = current.find((p) => key(p.pos) === key(ball.pos)) ?? null;
   let ballPos: Vec2 = { ...ball.pos };
+  let kickedThisTurn = false;
+
+  if (carrier && carrier.plannedKick) {
+    const kick = resolveKick(carrier, carrier.plannedKick, current);
+    events.push(kick.event);
+    ballPos = kick.restingPos;
+    kickedThisTurn = true;
+    // The kicker releases the ball and stays put; nobody else's plan changes.
+    current = current.map((p) =>
+      p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null } : p
+    );
+
+    if (kick.goal) {
+      const finalPawns = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+      return {
+        snapshots: [{ pawns: finalPawns, ball: ballPos }],
+        events,
+        goal: kick.goal,
+      };
+    }
+  }
+
+  const paths = new Map(
+    current.map((p) => [p.id, lerpPath(p.pos, p.plannedPos ?? p.pos, MOVE_RANGE)])
+  );
+  const stopped = new Set<string>();
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
     const preTickPos = new Map(current.map((p) => [p.id, p.pos]));
@@ -155,8 +269,8 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     }
 
     current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedPos: null }));
-    if (carrierId) {
-      ballPos = { ...current.find((p) => p.id === carrierId)!.pos };
+    if (carrier && !kickedThisTurn) {
+      ballPos = { ...current.find((p) => p.id === carrier.id)!.pos };
     }
     snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
   }

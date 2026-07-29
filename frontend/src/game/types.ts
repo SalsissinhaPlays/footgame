@@ -27,6 +27,8 @@ export interface Pawn {
   side: Side;
   pos: Vec2;
   plannedPos: Vec2 | null;
+  /** Set instead of plannedPos when this pawn (must be the ball carrier) kicks/passes this turn. */
+  plannedKick: Vec2 | null;
 }
 
 export interface Ball {

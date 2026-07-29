@@ -5,6 +5,7 @@ import {
   CELL_SIZE,
   GRID_COLS,
   GRID_ROWS,
+  KICK_RANGE,
   MOVE_RANGE,
   TOTAL_TURNS,
 } from "../game/constants";
@@ -39,6 +40,7 @@ export function Game() {
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [kickMode, setKickMode] = useState(false);
   const [turn, setTurn] = useState(1);
   const [homeScore, setHomeScore] = useState(0);
   const [awayScore, setAwayScore] = useState(0);
@@ -62,24 +64,28 @@ export function Game() {
   }, []);
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
+  const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
+  const selectedIsCarrier = !!selectedPawn && isCarrier(selectedPawn);
 
   const reachableCells = useMemo(() => {
     if (!selectedPawn) return new Set<string>();
+    const range = kickMode && selectedIsCarrier ? KICK_RANGE : MOVE_RANGE;
     const cells = new Set<string>();
-    for (let dx = -MOVE_RANGE; dx <= MOVE_RANGE; dx++) {
-      for (let dy = -MOVE_RANGE; dy <= MOVE_RANGE; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dy = -range; dy <= range; dy++) {
         const cell = { x: selectedPawn.pos.x + dx, y: selectedPawn.pos.y + dy };
-        if (inBounds(cell) && chebyshevDistance(selectedPawn.pos, cell) <= MOVE_RANGE) {
+        if (inBounds(cell) && chebyshevDistance(selectedPawn.pos, cell) <= range) {
           cells.add(`${cell.x},${cell.y}`);
         }
       }
     }
     return cells;
-  }, [selectedPawn]);
+  }, [selectedPawn, kickMode, selectedIsCarrier]);
 
   function handlePawnClick(pawn: Pawn) {
     if (resolving || matchOver) return;
     if (pawn.side !== "home") return;
+    setKickMode(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
   }
 
@@ -88,19 +94,33 @@ export function Game() {
     if (!selectedPawn) return;
     if (!reachableCells.has(`${cell.x},${cell.y}`)) return;
 
-    setPawns((prev) =>
-      prev.map((p) =>
-        p.id === selectedPawn.id
-          ? { ...p, plannedPos: p.pos.x === cell.x && p.pos.y === cell.y ? null : cell }
-          : p
-      )
-    );
+    if (kickMode && selectedIsCarrier) {
+      setPawns((prev) =>
+        prev.map((p) =>
+          p.id === selectedPawn.id ? { ...p, plannedKick: cell, plannedPos: null } : p
+        )
+      );
+    } else {
+      setPawns((prev) =>
+        prev.map((p) =>
+          p.id === selectedPawn.id
+            ? {
+                ...p,
+                plannedPos: p.pos.x === cell.x && p.pos.y === cell.y ? null : cell,
+                plannedKick: null,
+              }
+            : p
+        )
+      );
+    }
     setSelectedId(null);
+    setKickMode(false);
   }
 
   async function handleProceed() {
     if (resolving || matchOver) return;
     setSelectedId(null);
+    setKickMode(false);
     setResolving(true);
     setEvents([]);
 
@@ -136,7 +156,7 @@ export function Game() {
           y={y * CELL_SIZE}
           width={CELL_SIZE}
           height={CELL_SIZE}
-          className={`cell ${isReachable ? "reachable" : ""}`}
+          className={`cell ${isReachable ? "reachable" : ""} ${isReachable && kickMode ? "kicking" : ""}`}
           onClick={() => handleCellClick({ x, y })}
         />
       );
@@ -179,6 +199,25 @@ export function Game() {
           movimento. Quem estiver em cima da bola a carrega ao se mover. Clique em "Prosseguir"
           para executar os movimentos planejados.
         </p>
+      )}
+      {selectedIsCarrier && !matchOver && (
+        <div className="kick-toggle">
+          <span>Peão com a bola — escolha a ação:</span>
+          <button
+            type="button"
+            className={kickMode ? "" : "active"}
+            onClick={() => setKickMode(false)}
+          >
+            Mover
+          </button>
+          <button
+            type="button"
+            className={kickMode ? "active" : ""}
+            onClick={() => setKickMode(true)}
+          >
+            Chutar
+          </button>
+        </div>
       )}
       {events.length > 0 && (
         <ul className="events-log">

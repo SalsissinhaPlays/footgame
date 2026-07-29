@@ -30,6 +30,23 @@ export function PawnView({ pawn, selected, onClick }: Props) {
           />
         </>
       )}
+      {pawn.plannedKick && (
+        <>
+          <line
+            x1={0}
+            y1={0}
+            x2={(pawn.plannedKick.x - pawn.pos.x) * CELL_SIZE}
+            y2={(pawn.plannedKick.y - pawn.pos.y) * CELL_SIZE}
+            className="kick-arrow"
+          />
+          <circle
+            cx={(pawn.plannedKick.x - pawn.pos.x) * CELL_SIZE}
+            cy={(pawn.plannedKick.y - pawn.pos.y) * CELL_SIZE}
+            r={CELL_SIZE * 0.15}
+            className="kick-target"
+          />
+        </>
+      )}
       <circle
         r={CELL_SIZE * 0.38}
         className={`pawn-circle ${pawn.side} ${selected ? "selected" : ""}`}

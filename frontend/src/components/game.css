@@ -36,6 +36,31 @@
   margin: 8px 0 16px;
 }
 
+.kick-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 10px;
+}
+
+.kick-toggle button {
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: 1px solid #999;
+  background: white;
+  cursor: pointer;
+}
+
+.kick-toggle button.active {
+  background: #ef6c00;
+  border-color: #ef6c00;
+  color: white;
+}
+
 .game-info {
   display: flex;
   align-items: center;
@@ -125,6 +150,10 @@
   cursor: pointer;
 }
 
+.cell.kicking {
+  fill: rgba(239, 108, 0, 0.28);
+}
+
 .pawn {
   cursor: pointer;
 }
@@ -172,4 +201,16 @@
 
 .pawn-ghost.away {
   fill: #c62828;
+}
+
+.kick-arrow {
+  stroke: #ef6c00;
+  stroke-width: 3;
+  stroke-dasharray: 2 4;
+}
+
+.kick-target {
+  fill: #ef6c00;
+  stroke: #33291a;
+  stroke-width: 1;
 }
