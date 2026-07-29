@@ -1,4 +1,4 @@
-import { CELL_SIZE, GRID_COLS, GRID_ROWS } from "../game/constants";
+import { CELL_SIZE, GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, GRID_ROWS } from "../game/constants";
 
 const W = GRID_COLS * CELL_SIZE;
 const H = GRID_ROWS * CELL_SIZE;
@@ -17,8 +17,8 @@ export function Field() {
   }
 
   const goalDepth = CELL_SIZE * 1.5;
-  const goalHeight = CELL_SIZE * 3;
-  const goalY = (H - goalHeight) / 2;
+  const goalY = GOAL_ROW_MIN * CELL_SIZE;
+  const goalHeight = (GOAL_ROW_MAX - GOAL_ROW_MIN + 1) * CELL_SIZE;
 
   return (
     <g>
@@ -27,8 +27,8 @@ export function Field() {
       <rect x={1} y={1} width={W - 2} height={H - 2} className="pitch-border" />
       <line x1={W / 2} y1={0} x2={W / 2} y2={H} className="pitch-border" />
       <circle cx={W / 2} cy={H / 2} r={CELL_SIZE * 1.5} className="pitch-border" fill="none" />
-      <rect x={0} y={goalY} width={goalDepth} height={goalHeight} className="pitch-border" fill="none" />
-      <rect x={W - goalDepth} y={goalY} width={goalDepth} height={goalHeight} className="pitch-border" fill="none" />
+      <rect x={0} y={goalY} width={goalDepth} height={goalHeight} className="goal-area" />
+      <rect x={W - goalDepth} y={goalY} width={goalDepth} height={goalHeight} className="goal-area" />
     </g>
   );
 }

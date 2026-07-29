@@ -28,3 +28,7 @@ export interface Pawn {
   pos: Vec2;
   plannedPos: Vec2 | null;
 }
+
+export interface Ball {
+  pos: Vec2;
+}

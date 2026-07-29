@@ -21,6 +21,19 @@
 .vs {
   color: #888;
   font-weight: normal;
+  margin: 0 6px;
+}
+
+.score {
+  color: #1565c0;
+  margin: 0 6px;
+}
+
+.result-banner {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2e7d32;
+  margin: 8px 0 16px;
 }
 
 .game-info {
@@ -87,6 +100,19 @@
   stroke: rgba(255, 255, 255, 0.75);
   stroke-width: 2;
   fill: none;
+}
+
+.goal-area {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 2;
+}
+
+.ball {
+  fill: #fff8e1;
+  stroke: #33291a;
+  stroke-width: 1.5;
+  pointer-events: none;
 }
 
 .cell {

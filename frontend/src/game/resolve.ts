@@ -1,9 +1,28 @@
-import { MOVE_RANGE } from "./constants";
-import type { Pawn, Vec2 } from "./types";
+import { GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, MOVE_RANGE } from "./constants";
+import type { Ball, Pawn, Side, Vec2 } from "./types";
+
+export interface ResolveSnapshot {
+  pawns: Pawn[];
+  ball: Vec2;
+}
 
 export interface ResolveResult {
-  snapshots: Pawn[][];
+  snapshots: ResolveSnapshot[];
   events: string[];
+  /** Side that scored, if the ball ended the turn inside a goal mouth. */
+  goal: Side | null;
+}
+
+function isInGoalRows(y: number): boolean {
+  return y >= GOAL_ROW_MIN && y <= GOAL_ROW_MAX;
+}
+
+/** Which side's net the ball is sitting in, if any. Home attacks toward the right edge. */
+function goalScoredAt(pos: Vec2): Side | null {
+  if (!isInGoalRows(pos.y)) return null;
+  if (pos.x <= 0) return "away";
+  if (pos.x >= GRID_COLS - 1) return "home";
+  return null;
 }
 
 function key(v: Vec2): string {
@@ -45,14 +64,19 @@ function pickWinner(contestants: Pawn[]): Pawn {
  * no two pawns may occupy the same cell in any snapshot. Collisions are
  * settled with a skill check; losers are stopped for the rest of the turn.
  */
-export function resolveTurn(pawns: Pawn[]): ResolveResult {
+export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   const events: string[] = [];
   let current: Pawn[] = pawns.map((p) => ({ ...p }));
   const paths = new Map(
     current.map((p) => [p.id, lerpPath(p.pos, p.plannedPos ?? p.pos, MOVE_RANGE)])
   );
   const stopped = new Set<string>();
-  const snapshots: Pawn[][] = [];
+  const snapshots: ResolveSnapshot[] = [];
+
+  // Whoever starts the turn standing on the ball carries it. If nobody is
+  // there, the ball just sits still until someone reaches it next turn.
+  const carrierId = current.find((p) => key(p.pos) === key(ball.pos))?.id ?? null;
+  let ballPos: Vec2 = { ...ball.pos };
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
     const preTickPos = new Map(current.map((p) => [p.id, p.pos]));
@@ -131,8 +155,16 @@ export function resolveTurn(pawns: Pawn[]): ResolveResult {
     }
 
     current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedPos: null }));
-    snapshots.push(current.map((p) => ({ ...p })));
+    if (carrierId) {
+      ballPos = { ...current.find((p) => p.id === carrierId)!.pos };
+    }
+    snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
   }
 
-  return { snapshots, events };
+  const goal = goalScoredAt(ballPos);
+  if (goal) {
+    events.push(goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
+  }
+
+  return { snapshots, events, goal };
 }
