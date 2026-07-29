@@ -35,12 +35,17 @@ function kickoffFormation(pawns: Pawn[]): Pawn[] {
   return [...buildFormation(homePlayers, "home"), ...buildFormation(awayPlayers, "away")];
 }
 
-export function Game() {
+interface Props {
+  onExitToMenu: () => void;
+}
+
+export function Game({ onExitToMenu }: Props) {
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
+  const [controllingSide, setControllingSide] = useState<"home" | "away">("home");
   const [turn, setTurn] = useState(1);
   const [homeScore, setHomeScore] = useState(0);
   const [awayScore, setAwayScore] = useState(0);
@@ -82,9 +87,16 @@ export function Game() {
     return cells;
   }, [selectedPawn, kickMode, selectedIsCarrier]);
 
+  function handleSwitchSide(side: "home" | "away") {
+    if (resolving) return;
+    setControllingSide(side);
+    setSelectedId(null);
+    setKickMode(false);
+  }
+
   function handlePawnClick(pawn: Pawn) {
     if (resolving || matchOver) return;
-    if (pawn.side !== "home") return;
+    if (pawn.side !== controllingSide) return;
     setKickMode(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
   }
@@ -177,6 +189,9 @@ export function Game() {
   return (
     <div className="game-wrapper">
       <div className="game-header">
+        <button type="button" className="exit-button" onClick={onExitToMenu}>
+          ← Menu
+        </button>
         <h1>
           {teams[0]?.name} <span className="score">{homeScore}</span>
           <span className="vs">x</span>
@@ -191,13 +206,30 @@ export function Game() {
           </button>
         </div>
       </div>
+      <div className="side-toggle">
+        <span>Controlando:</span>
+        <button
+          type="button"
+          className={controllingSide === "home" ? "active home" : "home"}
+          onClick={() => handleSwitchSide("home")}
+        >
+          {teams[0]?.name}
+        </button>
+        <button
+          type="button"
+          className={controllingSide === "away" ? "active away" : "away"}
+          onClick={() => handleSwitchSide("away")}
+        >
+          {teams[1]?.name}
+        </button>
+      </div>
       {matchOver ? (
         <p className="result-banner">{resultText}</p>
       ) : (
         <p className="hint">
-          Clique em um peão azul (seu time) e depois em uma casa destacada para planejar o
-          movimento. Quem estiver em cima da bola a carrega ao se mover. Clique em "Prosseguir"
-          para executar os movimentos planejados.
+          Clique em um peão do time em controle e depois em uma casa destacada para planejar o
+          movimento. Quem estiver em cima da bola a carrega ao se mover. Passe o computador pro
+          outro jogador (ou troque acima) antes de clicar em "Prosseguir".
         </p>
       )}
       {selectedIsCarrier && !matchOver && (
