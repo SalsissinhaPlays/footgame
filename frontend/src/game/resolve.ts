@@ -29,16 +29,22 @@ function key(v: Vec2): string {
   return `${v.x},${v.y}`;
 }
 
-function lerpPath(start: Vec2, end: Vec2, steps: number): Vec2[] {
-  const path: Vec2[] = [];
-  for (let t = 1; t <= steps; t++) {
-    const fraction = t / steps;
-    path.push({
-      x: Math.round(start.x + (end.x - start.x) * fraction),
-      y: Math.round(start.y + (end.y - start.y) * fraction),
-    });
-  }
-  return path;
+/**
+ * Candidate single-cell steps from `pos` toward `dest`, best first: the direct
+ * diagonal, then sidestepping around an obstacle using only the horizontal or
+ * only the vertical component. Lets a pawn skirt a stationary blocker instead
+ * of being stuck the instant the straight line to its target is occupied.
+ */
+function candidateSteps(pos: Vec2, dest: Vec2): Vec2[] {
+  const dx = Math.sign(dest.x - pos.x);
+  const dy = Math.sign(dest.y - pos.y);
+  if (dx === 0 && dy === 0) return [{ ...pos }];
+
+  const options: Vec2[] = [];
+  if (dx !== 0 && dy !== 0) options.push({ x: pos.x + dx, y: pos.y + dy });
+  if (dx !== 0) options.push({ x: pos.x + dx, y: pos.y });
+  if (dy !== 0) options.push({ x: pos.x, y: pos.y + dy });
+  return options;
 }
 
 function skillCheckRoll(pawn: Pawn): number {
@@ -187,16 +193,23 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     }
   }
 
-  const paths = new Map(
-    current.map((p) => [p.id, lerpPath(p.pos, p.plannedPos ?? p.pos, MOVE_RANGE)])
-  );
+  // Each pawn's final destination for the turn; movement advances one cell
+  // per tick toward it, so a pawn blocked mid-way keeps whatever progress it
+  // already made instead of losing the whole turn.
+  const destinations = new Map(current.map((p) => [p.id, p.plannedPos ?? p.pos]));
   const stopped = new Set<string>();
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
     const preTickPos = new Map(current.map((p) => [p.id, p.pos]));
+    // Recomputed fresh every tick, since a blocker from an earlier tick may
+    // have since moved out of the way.
+    const candidates = new Map(
+      current.map((p) => [p.id, candidateSteps(p.pos, destinations.get(p.id)!)])
+    );
+    const candidateIndex = new Map(current.map((p) => [p.id, 0]));
     const intended = new Map<string, Vec2>();
     for (const p of current) {
-      intended.set(p.id, stopped.has(p.id) ? p.pos : paths.get(p.id)![tick]);
+      intended.set(p.id, stopped.has(p.id) ? p.pos : candidates.get(p.id)![0]);
     }
 
     const isMoving = (id: string) => key(intended.get(id)!) !== key(preTickPos.get(id)!);
@@ -212,12 +225,23 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
 
       // Rule 1: a cell held by a pawn that isn't vacating it this tick is a
       // hard block — no skill check, nobody can walk through an occupied square.
+      // Rather than giving up immediately, the pawn tries its next-best
+      // sidestep candidate (skirting the obstacle) before settling for staying
+      // put this tick — it can still try again next tick either way.
       for (const p of current) {
         if (!isMoving(p.id)) continue;
-        const occupant = occupantOf(intended.get(p.id)!, p.id);
-        if (occupant && !isMoving(occupant.id)) {
-          intended.set(p.id, preTickPos.get(p.id)!);
-          stopped.add(p.id);
+        let occupant = occupantOf(intended.get(p.id)!, p.id);
+        while (occupant && !isMoving(occupant.id)) {
+          const options = candidates.get(p.id)!;
+          const nextIndex = candidateIndex.get(p.id)! + 1;
+          if (nextIndex >= options.length) {
+            intended.set(p.id, preTickPos.get(p.id)!);
+            occupant = undefined;
+          } else {
+            candidateIndex.set(p.id, nextIndex);
+            intended.set(p.id, options[nextIndex]);
+            occupant = occupantOf(intended.get(p.id)!, p.id);
+          }
           changed = true;
         }
       }
