@@ -3,6 +3,10 @@ export const GRID_ROWS = 10;
 export const CELL_SIZE = 50;
 export const MOVE_RANGE = 3;
 export const KICK_RANGE = 10;
+// Cells the ball covers per resolution tick once kicked — faster than a
+// pawn's 1 cell/tick dash, so it arrives as soon as it covers the real
+// distance instead of always stretching to fill every tick of the turn.
+export const BALL_SPEED = 4;
 
 export const TOTAL_TURNS = 12;
 

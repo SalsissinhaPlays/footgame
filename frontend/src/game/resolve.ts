@@ -1,4 +1,4 @@
-import { GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, KICK_RANGE, MOVE_RANGE } from "./constants";
+import { BALL_SPEED, GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, KICK_RANGE, MOVE_RANGE } from "./constants";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
 
 export interface ResolveSnapshot {
@@ -189,14 +189,16 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null } : p
     );
 
-    // Spread the flight across the same number of ticks pawns use to move,
-    // so the ball is seen travelling instead of teleporting straight to its
-    // resting cell on the very first frame.
+    // The ball advances BALL_SPEED cells per tick — faster than a pawn, but at
+    // a constant pace — so it's seen travelling instead of teleporting to its
+    // resting cell, and arrives as soon as it actually covers the distance
+    // rather than always stretching across every tick of the turn.
     const flight = kick.path.length > 0 ? kick.path : [kick.restingPos];
     kickBallTicks = [];
+    let flightIdx = -1;
     for (let t = 0; t < MOVE_RANGE; t++) {
-      const idx = Math.min(flight.length - 1, Math.round(((t + 1) / MOVE_RANGE) * (flight.length - 1)));
-      kickBallTicks.push(flight[idx]);
+      flightIdx = Math.min(flight.length - 1, flightIdx + BALL_SPEED);
+      kickBallTicks.push(flight[flightIdx]);
     }
     ballPos = kick.restingPos;
 
