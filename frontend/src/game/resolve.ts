@@ -1,4 +1,20 @@
-import { BALL_SPEED, GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, KICK_RANGE, MOVE_RANGE } from "./constants";
+import {
+  BALL_SPEED,
+  CAPTURE_RADIUS,
+  DECISIVE_CONTEST_MARGIN,
+  DEFLECTION_ANGLE_SPREAD,
+  DEFLECTION_SPEED,
+  GOAL_ROW_MAX,
+  GOAL_ROW_MIN,
+  GRID_COLS,
+  KICK_RANGE,
+  MOVE_RANGE,
+  ROLL_FRICTION,
+  ROLL_START_SPEED,
+  ROLL_STOP_EPS,
+} from "./constants";
+import { sampleLanding } from "./aim";
+import { resolveContest, resolveContestDetailed } from "./contest";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
 
 export interface ResolveSnapshot {
@@ -52,24 +68,6 @@ function candidateSteps(pos: Vec2, dest: Vec2): Vec2[] {
   return options;
 }
 
-function skillCheckRoll(pawn: Pawn): number {
-  const { skill, pace } = pawn.player;
-  return skill * 0.7 + pace * 0.3 + (Math.random() * 30 - 15);
-}
-
-function pickWinner(contestants: Pawn[]): Pawn {
-  let best = contestants[0];
-  let bestRoll = -Infinity;
-  for (const c of contestants) {
-    const roll = skillCheckRoll(c);
-    if (roll > bestRoll) {
-      bestRoll = roll;
-      best = c;
-    }
-  }
-  return best;
-}
-
 /** Grid cells crossed in a straight line from `start` to `end`, excluding `start`. */
 export function lineCells(start: Vec2, end: Vec2): Vec2[] {
   const dist = Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y), 1);
@@ -90,133 +88,227 @@ export function lineCells(start: Vec2, end: Vec2): Vec2[] {
   return cells;
 }
 
-export interface KickResult {
-  restingPos: Vec2;
-  /** Cells the ball actually crosses, in order, ending at restingPos — used to animate its flight. */
-  path: Vec2[];
-  receiver: Pawn | null;
-  interceptedBy: Pawn | null;
-  goal: Side | null;
-  event: string;
+function distance(a: Vec2, b: Vec2): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Closest point to `p` on the segment `a -> b`. */
+function closestPointOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const lenSq = abx * abx + aby * aby;
+  if (lenSq < 1e-9) return { ...a };
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq));
+  return { x: a.x + abx * t, y: a.y + aby * t };
 }
 
 /**
- * A kicked ball travels in a straight line from the carrier toward the target
- * (clamped to KICK_RANGE) using the pawns' positions at the start of the turn.
- * It stops at the first occupied cell it crosses — an opponent there gets a
- * chance to intercept, a teammate simply receives the pass — or at the goal
- * mouth, or at the end of its range if the lane is clear.
+ * Shortest distance from `p` to the segment `a -> b`. Capture checks use this
+ * instead of point-to-point distance against just the ball's post-tick
+ * position, because the ball can cover several grid units in one tick (faster
+ * than BALL_SPEED-radius) — checking only the endpoint would let it tunnel
+ * straight past a defender sitting exactly on the line without ever coming
+ * within range of it.
  */
-function resolveKick(carrier: Pawn, rawTarget: Vec2, pawns: Pawn[]): KickResult {
+function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  return distance(p, closestPointOnSegment(p, a, b));
+}
+
+function normalizeVec(v: Vec2): Vec2 {
+  const len = Math.hypot(v.x, v.y) || 1;
+  return { x: v.x / len, y: v.y / len };
+}
+
+/** Rotates `v` by `angleRad` radians. */
+function rotateVec(v: Vec2, angleRad: number): Vec2 {
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  return { x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos };
+}
+
+/**
+ * A ball in flight, tracked as a real point moving along a fixed straight
+ * line (from the carrier's position at the moment of the kick, to the
+ * clamped target) rather than a precomputed list of grid cells. Advancing it
+ * is just moving `traveled` forward each tick; where it actually is at any
+ * point is a continuous position, which is what lets height/curve/roll be
+ * layered on top later without changing this shape.
+ */
+interface BallFlight {
+  kickerId: string;
+  kickerSide: Side;
+  from: Vec2;
+  to: Vec2;
+  totalDist: number;
+  traveled: number;
+  /** Defenders who already had their one contest against this flight and lost — they don't get a second roll just for staying close. */
+  contested: Set<string>;
+}
+
+/**
+ * A loose ball moving under its own momentum rather than heading toward a
+ * kicked target — what an unopposed kick becomes once it "lands" with nobody
+ * there to meet it, or what a scrappy (non-decisive) challenge produces
+ * instead of a clean takeover. Decays via friction each tick; whoever it
+ * ends up within CAPTURE_RADIUS of picks it up (a contest if more than one
+ * pawn qualifies), same as any other capture check.
+ */
+interface BallRoll {
+  pos: Vec2;
+  vx: number;
+  vy: number;
+  /** The pawn whose touch just knocked the ball loose, if any — excluded from claiming it back for the rest of this roll, since a ball that's just come off your foot at a bad angle isn't immediately back under your control. */
+  excludeId?: string;
+}
+
+interface FlightStart {
+  flight: BallFlight;
+  /** Set when the kick landed noticeably off its aim point — worth a distinct event message. */
+  mishit: boolean;
+}
+
+function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
   const dist = Math.max(Math.abs(rawTarget.x - carrier.pos.x), Math.abs(rawTarget.y - carrier.pos.y));
   const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
-  const target: Vec2 = {
-    x: Math.round(carrier.pos.x + (rawTarget.x - carrier.pos.x) * clampFraction),
-    y: Math.round(carrier.pos.y + (rawTarget.y - carrier.pos.y) * clampFraction),
+  const aim: Vec2 = {
+    x: carrier.pos.x + (rawTarget.x - carrier.pos.x) * clampFraction,
+    y: carrier.pos.y + (rawTarget.y - carrier.pos.y) * clampFraction,
   };
-  const fullPath = lineCells(carrier.pos, target);
-  const traveled: Vec2[] = [];
+  // Where the kick is actually going isn't the aim point itself — it's
+  // sampled from a spread around it, tighter for a shorter/more skilled
+  // kick. The flight then travels toward that real landing point exactly
+  // like any other kick: same straight-line path, same tick-by-tick
+  // interception checks. Only the target the flight aims for changes.
+  const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill);
+  return {
+    flight: {
+      kickerId: carrier.id,
+      kickerSide: carrier.side,
+      from: { ...carrier.pos },
+      to: landing.point,
+      totalDist: Math.max(distance(carrier.pos, landing.point), 1e-6),
+      traveled: 0,
+      contested: new Set(),
+    },
+    mishit: landing.missBy > landing.sigma,
+  };
+}
 
-  for (const cell of fullPath) {
-    traveled.push(cell);
-    const occupant = pawns.find((p) => p.id !== carrier.id && key(p.pos) === key(cell));
-    if (occupant) {
-      if (occupant.side === carrier.side) {
-        return {
-          restingPos: cell,
-          path: [...traveled],
-          receiver: occupant,
-          interceptedBy: null,
-          goal: null,
-          event: `Passe: ${carrier.player.name} encontra ${occupant.player.name}`,
-        };
-      }
-      const kickRoll = skillCheckRoll(carrier);
-      const defenseRoll = skillCheckRoll(occupant);
-      if (defenseRoll > kickRoll) {
-        return {
-          restingPos: cell,
-          path: [...traveled],
-          receiver: null,
-          interceptedBy: occupant,
-          goal: null,
-          event: `Interceptação: ${occupant.player.name} corta o chute de ${carrier.player.name}`,
-        };
-      }
-      // Kick breaks through this defender — keep travelling the rest of the path.
-    }
+function pointAlongFlight(flight: BallFlight): Vec2 {
+  const t = Math.min(1, flight.traveled / flight.totalDist);
+  return {
+    x: flight.from.x + (flight.to.x - flight.from.x) * t,
+    y: flight.from.y + (flight.to.y - flight.from.y) * t,
+  };
+}
 
-    const goal = goalScoredAt(cell);
-    if (goal) {
+interface CaptureOutcome {
+  receiver: Pawn | null;
+  interceptedBy: Pawn | null;
+  /** A challenge was contested and won, but not decisively — the ball squirts loose from this point rather than settling with anyone. */
+  deflectedAt: Vec2 | null;
+  /** Who caused the deflection — excluded from immediately reclaiming their own loose touch. */
+  deflectedBy: string | null;
+  event: string | null;
+}
+
+/**
+ * Checks the ground this tick's flight movement actually swept over — the
+ * segment from where it started the tick to where it ends up — against
+ * every pawn's up-to-date position, not just whoever was in the way at the
+ * moment of the kick. A teammate within CAPTURE_RADIUS of that segment
+ * receives the ball; an opponent gets a contest to intercept it. Winning that
+ * contest decisively is a clean takeover; winning it narrowly only knocks the
+ * ball loose (see DECISIVE_CONTEST_MARGIN) rather than granting control.
+ * Losing the contest doesn't end the flight (the kick "breaks through"), but
+ * that defender is marked so lingering next to the ball's path isn't a free
+ * repeated roll.
+ */
+function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): CaptureOutcome {
+  const kicker = pawns.find((p) => p.id === flight.kickerId)!;
+  const nearby = pawns
+    .filter((p) => p.id !== flight.kickerId && !flight.contested.has(p.id))
+    .map((p) => ({ p, d: distanceToSegment(p.pos, from, to) }))
+    .filter(({ d }) => d <= CAPTURE_RADIUS)
+    .sort((a, b) => a.d - b.d);
+
+  for (const { p } of nearby) {
+    if (p.side === flight.kickerSide) {
       return {
-        restingPos: cell,
-        path: [...traveled],
-        receiver: null,
+        receiver: p,
         interceptedBy: null,
-        goal,
-        event: goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!",
+        deflectedAt: null,
+        deflectedBy: null,
+        event: `Passe: ${kicker.player.name} encontra ${p.player.name}`,
       };
     }
+    const { winner, margin } = resolveContestDetailed([p, kicker], "interception");
+    if (winner === p) {
+      if (margin >= DECISIVE_CONTEST_MARGIN) {
+        return {
+          receiver: null,
+          interceptedBy: p,
+          deflectedAt: null,
+          deflectedBy: null,
+          event: `Interceptação: ${p.player.name} corta o chute de ${kicker.player.name}`,
+        };
+      }
+      return {
+        receiver: null,
+        interceptedBy: null,
+        deflectedAt: closestPointOnSegment(p.pos, from, to),
+        deflectedBy: p.id,
+        event: `${p.player.name} desvia o chute de ${kicker.player.name} — bola solta!`,
+      };
+    }
+    flight.contested.add(p.id);
   }
-
-  const finalCell = fullPath[fullPath.length - 1] ?? carrier.pos;
-  return {
-    restingPos: finalCell,
-    path: traveled.length > 0 ? traveled : [finalCell],
-    receiver: null,
-    interceptedBy: null,
-    goal: null,
-    event: `${carrier.player.name} chuta a bola para (${finalCell.x},${finalCell.y})`,
-  };
+  return { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
 }
 
 /**
  * Resolves one full turn tick by tick. Invariant that must never break:
  * no two pawns may occupy the same cell in any snapshot. Collisions are
  * settled with a skill check; losers are stopped for the rest of the turn.
+ *
+ * The ball and pawn movement share this same tick loop rather than being two
+ * sequential phases: a kicked ball is checked against every pawn's
+ * just-updated position every tick, so a defender or receiver moving into its
+ * path this same turn — not just whoever was already standing there — can
+ * change the outcome. A turnover (interception) freezes the rest of the
+ * turn's resolution immediately, same as a goal; a completed pass to a
+ * teammate does not, since possession hasn't actually changed sides.
  */
 export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   const events: string[] = [];
   let current: Pawn[] = pawns.map((p) => ({ ...p }));
   const snapshots: ResolveSnapshot[] = [];
 
-  // Whoever starts the turn standing on the ball carries it. If nobody is
-  // there, the ball just sits still until someone reaches it next turn.
-  const carrier = current.find((p) => key(p.pos) === key(ball.pos)) ?? null;
+  // Whoever starts the turn within capture range of the ball carries it. If
+  // nobody is there, the ball just sits still until someone reaches it.
+  const carrier = current.find((p) => distance(p.pos, ball.pos) <= CAPTURE_RADIUS) ?? null;
   let ballPos: Vec2 = { ...ball.pos };
-  let kickBallTicks: Vec2[] | null = null;
+  let flight: BallFlight | null = null;
+  let roll: BallRoll | null = null;
+  let currentCarrierId: string | null = carrier?.id ?? null;
+  // Whichever side last actually controlled the ball — used to tell a real
+  // turnover (the other side ends up with it) apart from a side simply
+  // recovering its own loose ball, which shouldn't interrupt resolution.
+  let lastControllingSide: Side | null = carrier?.side ?? null;
 
   if (carrier && carrier.plannedKick) {
-    const kick = resolveKick(carrier, carrier.plannedKick, current);
-    events.push(kick.event);
+    const started = startFlight(carrier, carrier.plannedKick);
+    flight = started.flight;
+    events.push(
+      started.mishit
+        ? `${carrier.player.name} chuta, mas a bola sai imprecisa`
+        : `${carrier.player.name} chuta a bola`
+    );
     // The kicker releases the ball and stays put; nobody else's plan changes.
     current = current.map((p) =>
       p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null } : p
     );
-
-    // The ball advances BALL_SPEED cells per tick — faster than a pawn, but at
-    // a constant pace — so it's seen travelling instead of teleporting to its
-    // resting cell, and arrives as soon as it actually covers the distance
-    // rather than always stretching across every tick of the turn.
-    const flight = kick.path.length > 0 ? kick.path : [kick.restingPos];
-    kickBallTicks = [];
-    let flightIdx = -1;
-    for (let t = 0; t < MOVE_RANGE; t++) {
-      flightIdx = Math.min(flight.length - 1, flightIdx + BALL_SPEED);
-      kickBallTicks.push(flight[flightIdx]);
-    }
-    ballPos = kick.restingPos;
-
-    if (kick.goal) {
-      // Play stops the instant the ball crosses the line — everyone else
-      // freezes while the ball finishes its flight into the net.
-      const frozenPawns = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
-      const goalSnapshots = kickBallTicks.map((pos) => ({
-        pawns: frozenPawns.map((p) => ({ ...p })),
-        ball: { ...pos },
-      }));
-      return { snapshots: goalSnapshots, events, goal: kick.goal };
-    }
+    currentCarrierId = null;
   }
 
   // Each pawn's final destination for the turn; movement advances one cell
@@ -282,7 +374,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         if (!occupant || !isMoving(occupant.id) || stopped.has(occupant.id)) continue;
         if (key(intended.get(occupant.id)!) !== key(preTickPos.get(p.id)!)) continue;
 
-        const winner = pickWinner([p, occupant]);
+        const winner = resolveContest([p, occupant], "loose_ball");
         const loser = winner.id === p.id ? occupant : p;
         events.push(
           `Choque ao cruzar: ${p.player.name} vs ${occupant.player.name} — vence ${winner.player.name}`
@@ -304,7 +396,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       for (const [cellKey, ids] of destGroups) {
         if (ids.length <= 1) continue;
         const contestants = ids.map((id) => current.find((p) => p.id === id)!);
-        const winner = pickWinner(contestants);
+        const winner = resolveContest(contestants, "loose_ball");
         events.push(
           `Disputa em (${cellKey}): ${contestants.map((c) => c.player.name).join(" vs ")} — vence ${winner.player.name}`
         );
@@ -319,11 +411,97 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     }
 
     current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedPos: null }));
-    if (kickBallTicks) {
-      ballPos = { ...kickBallTicks[tick] };
-    } else if (carrier) {
-      ballPos = { ...current.find((p) => p.id === carrier.id)!.pos };
+
+    if (flight) {
+      const tickStart = pointAlongFlight(flight);
+      flight.traveled = Math.min(flight.totalDist, flight.traveled + BALL_SPEED);
+      const point = pointAlongFlight(flight);
+      const goal = goalScoredAt(point);
+      if (goal) {
+        ballPos = point;
+        events.push(goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
+        const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+        snapshots.push({ pawns: frozen, ball: { ...ballPos } });
+        return { snapshots, events, goal };
+      }
+
+      const outcome = checkCapture(flight, tickStart, point, current);
+      ballPos = point;
+      if (outcome.event) events.push(outcome.event);
+
+      if (outcome.receiver) {
+        // Possession stays with the same side — play continues, the receiver
+        // just becomes who the ball follows for the rest of the turn.
+        flight = null;
+        currentCarrierId = outcome.receiver.id;
+        lastControllingSide = outcome.receiver.side;
+      } else if (outcome.interceptedBy) {
+        // Turnover: freeze everything else right here, mid-turn.
+        flight = null;
+        currentCarrierId = outcome.interceptedBy.id;
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+        break;
+      } else if (outcome.deflectedAt) {
+        // Contested but not cleanly won — the ball comes off this challenge
+        // at a wide, unpredictable angle rather than settling with anyone.
+        const dir = normalizeVec({ x: flight.to.x - flight.from.x, y: flight.to.y - flight.from.y });
+        const kicked = rotateVec(dir, (Math.random() * 2 - 1) * DEFLECTION_ANGLE_SPREAD);
+        const deflectorId = outcome.deflectedBy;
+        flight = null;
+        roll = {
+          pos: outcome.deflectedAt,
+          vx: kicked.x * DEFLECTION_SPEED,
+          vy: kicked.y * DEFLECTION_SPEED,
+          excludeId: deflectorId ?? undefined,
+        };
+        ballPos = outcome.deflectedAt;
+      } else if (flight.traveled >= flight.totalDist) {
+        // Nobody there to meet it — the ball keeps a little energy and rolls
+        // on rather than stopping dead exactly at the aim point.
+        const dir = normalizeVec({ x: flight.to.x - flight.from.x, y: flight.to.y - flight.from.y });
+        flight = null;
+        currentCarrierId = null;
+        roll = { pos: point, vx: dir.x * ROLL_START_SPEED, vy: dir.y * ROLL_START_SPEED };
+      }
+    } else if (roll) {
+      const rollFrom = { ...roll.pos };
+      roll.pos = { x: roll.pos.x + roll.vx, y: roll.pos.y + roll.vy };
+      roll.vx *= ROLL_FRICTION;
+      roll.vy *= ROLL_FRICTION;
+      ballPos = roll.pos;
+
+      const rollGoal = goalScoredAt(ballPos);
+      if (rollGoal) {
+        events.push(rollGoal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
+        const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+        snapshots.push({ pawns: frozen, ball: { ...ballPos } });
+        return { snapshots, events, goal: rollGoal };
+      }
+
+      const claimants = current.filter(
+        (p) => p.id !== roll!.excludeId && distanceToSegment(p.pos, rollFrom, roll!.pos) <= CAPTURE_RADIUS
+      );
+      if (claimants.length > 0) {
+        const winner = claimants.length === 1 ? claimants[0] : resolveContest(claimants, "loose_ball");
+        const turnover = lastControllingSide !== null && winner.side !== lastControllingSide;
+        roll = null;
+        currentCarrierId = winner.id;
+        ballPos = { ...winner.pos };
+        lastControllingSide = winner.side;
+        events.push(`${winner.player.name} fica com a bola solta`);
+        if (turnover) {
+          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+          break;
+        }
+      } else if (Math.hypot(roll.vx, roll.vy) < ROLL_STOP_EPS) {
+        roll = null;
+        currentCarrierId = null;
+      }
+    } else if (currentCarrierId) {
+      const holder = current.find((p) => p.id === currentCarrierId);
+      if (holder) ballPos = { ...holder.pos };
     }
+
     snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
   }
 
