@@ -36,7 +36,7 @@ export function Field() {
       <polygon
         key={`stripe-${row}`}
         points={pointsAttr(band)}
-        className={`pitch-stripe ${row % 2 === 0 ? "light" : "dark"}`}
+        fill={row % 2 === 0 ? "url(#grass-light-tex)" : "url(#grass-dark-tex)"}
       />
     );
   }
@@ -48,43 +48,22 @@ export function Field() {
   return (
     <g>
       <defs>
-        <radialGradient id="grass-shine" cx="50%" cy="30%" r="80%">
-          <stop offset="0%" stopColor="#8fd88f" stopOpacity="0.25" />
-          <stop offset="100%" stopColor="#8fd88f" stopOpacity="0" />
-        </radialGradient>
         <linearGradient id="grass-vignette" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#0a1f0c" stopOpacity="0.25" />
+          <stop offset="0%" stopColor="#0a1f0c" stopOpacity="0.2" />
           <stop offset="15%" stopColor="#0a1f0c" stopOpacity="0" />
           <stop offset="85%" stopColor="#0a1f0c" stopOpacity="0" />
-          <stop offset="100%" stopColor="#0a1f0c" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#0a1f0c" stopOpacity="0.3" />
         </linearGradient>
-        <pattern id="grass-blades" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-          <line x1="0" y1="0" x2="0" y2="7" stroke="#1f5c26" strokeOpacity="0.18" strokeWidth="1" />
+        <pattern id="grass-light-tex" patternUnits="userSpaceOnUse" width="260" height="260">
+          <image href="/sprites/grass_light.png" width="260" height="260" />
         </pattern>
-        <radialGradient id="pawn-body-home" cx="35%" cy="25%" r="80%">
-          <stop offset="0%" stopColor="#6fa8ef" />
-          <stop offset="55%" stopColor="#3d76c9" />
-          <stop offset="100%" stopColor="#0d3a75" />
-        </radialGradient>
-        <radialGradient id="pawn-body-away" cx="35%" cy="25%" r="80%">
-          <stop offset="0%" stopColor="#f08080" />
-          <stop offset="55%" stopColor="#cc4646" />
-          <stop offset="100%" stopColor="#7a0f0f" />
-        </radialGradient>
-        <linearGradient id="pawn-limb-home" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#3d76c9" />
-          <stop offset="100%" stopColor="#0d3a75" />
-        </linearGradient>
-        <linearGradient id="pawn-limb-away" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#cc4646" />
-          <stop offset="100%" stopColor="#7a0f0f" />
-        </linearGradient>
+        <pattern id="grass-dark-tex" patternUnits="userSpaceOnUse" width="260" height="260">
+          <image href="/sprites/grass_dark.png" width="260" height="260" />
+        </pattern>
       </defs>
 
       <polygon points={pointsAttr(outer)} className="pitch-base" />
       {stripes}
-      <polygon points={pointsAttr(outer)} fill="url(#grass-blades)" />
-      <polygon points={pointsAttr(outer)} fill="url(#grass-shine)" />
       <polygon points={pointsAttr(outer)} fill="url(#grass-vignette)" />
       <polygon points={pointsAttr(outer)} className="pitch-border" />
 

@@ -184,18 +184,6 @@
   fill: #327a37;
 }
 
-.pitch-stripe {
-  stroke: none;
-}
-
-.pitch-stripe.light {
-  fill: #3b8a41;
-}
-
-.pitch-stripe.dark {
-  fill: #327a37;
-}
-
 .pitch-border {
   fill: none;
   stroke: #f2f2f2;
@@ -241,18 +229,6 @@
   fill: rgba(0, 0, 0, 0.4);
 }
 
-.ball {
-  fill: #fdfaf0;
-  stroke: #33291a;
-  stroke-width: 1.3;
-  pointer-events: none;
-}
-
-.ball-pentagon {
-  fill: #33291a;
-  pointer-events: none;
-}
-
 /* --- Cells --- */
 
 .cell {
@@ -281,48 +257,27 @@
   fill: rgba(0, 0, 0, 0.4);
 }
 
-.pawn-leg {
-  stroke: rgba(0, 0, 0, 0.4);
-  stroke-width: 1;
-}
-
-.pawn-leg.home {
-  fill: #16305c;
-}
-
-.pawn-leg.away {
-  fill: #5c1414;
-}
-
-.pawn-torso {
-  stroke: rgba(0, 0, 0, 0.5);
-  stroke-width: 1.5;
-}
-
-.pawn-torso.home {
-  fill: url(#pawn-body-home);
-}
-
-.pawn-torso.away {
-  fill: url(#pawn-body-away);
-}
-
-.pawn-torso.selected {
-  stroke: #ffeb3b;
-  stroke-width: 2.5;
-}
-
-.pawn-head {
-  fill: #e3ad80;
-  stroke: rgba(0, 0, 0, 0.4);
-  stroke-width: 1;
+.pawn-sprite {
+  pointer-events: none;
 }
 
 .pawn-select-ring {
-  fill: none;
+  fill: rgba(255, 235, 59, 0.25);
   stroke: #ffeb3b;
   stroke-width: 2;
-  stroke-dasharray: 3 2;
+}
+
+.pawn-badge {
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1;
+}
+
+.pawn-badge.home {
+  fill: #1565c0;
+}
+
+.pawn-badge.away {
+  fill: #c62828;
 }
 
 .pawn-number {

@@ -1,10 +1,17 @@
-import { TOKEN_RISE, toIso } from "../game/iso";
+import { toIso } from "../game/iso";
 import type { Pawn } from "../game/types";
 
 interface Props {
   pawn: Pawn;
   selected: boolean;
   onClick: () => void;
+}
+
+const SPRITE_SIZE = 92;
+
+function spriteFor(pawn: Pawn): string {
+  if (pawn.player.position === "GK") return "/sprites/player_gk.png";
+  return pawn.side === "home" ? "/sprites/player_home.png" : "/sprites/player_away.png";
 }
 
 export function PawnView({ pawn, selected, onClick }: Props) {
@@ -15,10 +22,7 @@ export function PawnView({ pawn, selected, onClick }: Props) {
     : null;
   const kickTarget = pawn.plannedKick ? toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5) : null;
 
-  const side = pawn.side;
-  const legTop = -TOKEN_RISE * 0.35;
-  const torsoTop = -TOKEN_RISE * 0.85;
-  const headY = -TOKEN_RISE;
+  const badgeY = -SPRITE_SIZE - 6;
 
   return (
     <g onClick={onClick} className="pawn" transform={`translate(${base.x}, ${base.y})`}>
@@ -30,7 +34,7 @@ export function PawnView({ pawn, selected, onClick }: Props) {
             cy={planned.y - base.y}
             rx={16}
             ry={8}
-            className={`pawn-ghost ${side}`}
+            className={`pawn-ghost ${pawn.side}`}
           />
         </>
       )}
@@ -41,24 +45,23 @@ export function PawnView({ pawn, selected, onClick }: Props) {
         </>
       )}
 
-      <ellipse cx={0} cy={0} rx={19} ry={9} className="pawn-shadow" />
+      <ellipse cx={0} cy={0} rx={20} ry={10} className="pawn-shadow" />
+      {selected && <ellipse cx={0} cy={0} rx={26} ry={13} className="pawn-select-ring" />}
 
-      {/* legs */}
-      <rect x={-9} y={legTop} width={7} height={-legTop} rx={2.5} className={`pawn-leg ${side}`} />
-      <rect x={2} y={legTop} width={7} height={-legTop} rx={2.5} className={`pawn-leg ${side}`} />
-
-      {/* torso (jersey) */}
-      <path
-        d={`M -13 ${legTop} Q -15 ${torsoTop} -10 ${torsoTop} L 10 ${torsoTop} Q 15 ${torsoTop} 13 ${legTop} Z`}
-        className={`pawn-torso ${side} ${selected ? "selected" : ""}`}
+      <image
+        href={spriteFor(pawn)}
+        x={-SPRITE_SIZE / 2}
+        y={-SPRITE_SIZE}
+        width={SPRITE_SIZE}
+        height={SPRITE_SIZE}
+        className="pawn-sprite"
+        preserveAspectRatio="xMidYMax meet"
       />
-      <text y={(legTop + torsoTop) / 2 + 1} textAnchor="middle" dominantBaseline="central" className="pawn-number">
+
+      <circle cy={badgeY} r={9} className={`pawn-badge ${pawn.side}`} />
+      <text y={badgeY} textAnchor="middle" dominantBaseline="central" className="pawn-number">
         {pawn.player.jersey_number}
       </text>
-
-      {/* head */}
-      <circle cy={headY} r={8.5} className="pawn-head" />
-      {selected && <circle cy={headY} r={13} className="pawn-select-ring" />}
     </g>
   );
 }
