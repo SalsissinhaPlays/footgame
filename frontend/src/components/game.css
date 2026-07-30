@@ -234,8 +234,18 @@
   opacity: 0.9;
 }
 
-.goal-area {
-  fill: rgba(255, 255, 255, 0.05);
+.pitch-apron {
+  fill: #2c6b31;
+}
+
+.pitch-apron-border {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1.5;
+}
+
+.goal-net {
+  fill: rgba(15, 15, 15, 0.55);
 }
 
 .goal-frame line {

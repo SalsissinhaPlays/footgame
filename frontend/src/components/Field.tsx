@@ -1,5 +1,5 @@
 import { GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, GRID_ROWS } from "../game/constants";
-import { pointsAttr, type Projector } from "../game/iso";
+import { GOAL_NET_DEPTH, OOB_MARGIN, pointsAttr, type Projector } from "../game/iso";
 
 const SIX_YARD_DEPTH = 1.2;
 const PENALTY_DEPTH = 2.6;
@@ -19,9 +19,22 @@ export function Field({ projector }: Props) {
     return [toIso(x0, yTop), toIso(x1, yTop), toIso(x1, yBottom), toIso(x0, yBottom)];
   }
 
-  function goalPosts(x0: number) {
-    const top = toIso(x0, GOAL_ROW_MIN);
-    const bottom = toIso(x0, GOAL_ROW_MAX + 1);
+  /** The goal net pocket, sitting just past the goal line in the out-of-bounds strip. */
+  function netBox(atHome: boolean) {
+    const lineX = atHome ? 0 : GRID_COLS;
+    const netX = atHome ? -GOAL_NET_DEPTH : GRID_COLS + GOAL_NET_DEPTH;
+    return [
+      toIso(lineX, GOAL_ROW_MIN),
+      toIso(netX, GOAL_ROW_MIN),
+      toIso(netX, GOAL_ROW_MAX + 1),
+      toIso(lineX, GOAL_ROW_MAX + 1),
+    ];
+  }
+
+  function goalPosts(atHome: boolean) {
+    const netX = atHome ? -GOAL_NET_DEPTH : GRID_COLS + GOAL_NET_DEPTH;
+    const top = toIso(netX, GOAL_ROW_MIN);
+    const bottom = toIso(netX, GOAL_ROW_MAX + 1);
     const rise = 30;
     return (
       <g className="goal-frame">
@@ -33,6 +46,12 @@ export function Field({ projector }: Props) {
     );
   }
 
+  const apron = [
+    toIso(-OOB_MARGIN, -OOB_MARGIN),
+    toIso(GRID_COLS + OOB_MARGIN, -OOB_MARGIN),
+    toIso(GRID_COLS + OOB_MARGIN, GRID_ROWS + OOB_MARGIN),
+    toIso(-OOB_MARGIN, GRID_ROWS + OOB_MARGIN),
+  ];
   const outer = [toIso(0, 0), toIso(GRID_COLS, 0), toIso(GRID_COLS, GRID_ROWS), toIso(0, GRID_ROWS)];
 
   const stripes = [];
@@ -68,10 +87,16 @@ export function Field({ projector }: Props) {
         </pattern>
       </defs>
 
+      <polygon points={pointsAttr(apron)} className="pitch-apron" />
+
+      <polygon points={pointsAttr(netBox(true))} className="goal-net" />
+      <polygon points={pointsAttr(netBox(false))} className="goal-net" />
+
       <polygon points={pointsAttr(outer)} className="pitch-base" />
       {stripes}
       <polygon points={pointsAttr(outer)} fill="url(#grass-vignette)" />
       <polygon points={pointsAttr(outer)} className="pitch-border" />
+      <polygon points={pointsAttr(apron)} className="pitch-apron-border" />
 
       <line x1={halfTop.x} y1={halfTop.y} x2={halfBottom.x} y2={halfBottom.y} className="pitch-line" />
       <path d={isoCirclePath(GRID_COLS / 2, GRID_ROWS / 2, 1.7)} className="pitch-line" fill="none" />
@@ -89,10 +114,8 @@ export function Field({ projector }: Props) {
         </g>
       ))}
 
-      <polygon points={pointsAttr(box(0, SIX_YARD_DEPTH, 0))} className="goal-area" />
-      <polygon points={pointsAttr(box(GRID_COLS, SIX_YARD_DEPTH, 0))} className="goal-area" />
-      {goalPosts(0)}
-      {goalPosts(GRID_COLS)}
+      {goalPosts(true)}
+      {goalPosts(false)}
     </g>
   );
 }

@@ -5,6 +5,7 @@ import {
   GRID_ROWS,
   KICK_RANGE,
   MOVE_RANGE,
+  OOB_CELLS,
 } from "./constants";
 import { lineCells } from "./resolve";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
@@ -14,11 +15,22 @@ function dist(a: Vec2, b: Vec2): number {
 }
 
 function inBounds(pos: Vec2): boolean {
-  return pos.x >= 0 && pos.x < GRID_COLS && pos.y >= 0 && pos.y < GRID_ROWS;
+  return (
+    pos.x >= -OOB_CELLS &&
+    pos.x < GRID_COLS + OOB_CELLS &&
+    pos.y >= -OOB_CELLS &&
+    pos.y < GRID_ROWS + OOB_CELLS
+  );
 }
 
-function opponentGoal(side: Side): Vec2 {
+/** The pitch-edge point closest to the opponent's goal — used for movement/ranking, always in bounds. */
+function opponentGoalLine(side: Side): Vec2 {
   return { x: side === "home" ? GRID_COLS - 1 : 0, y: Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2) };
+}
+
+/** Just past the goal line, inside the net — the actual shot target, since a goal only counts out there. */
+function opponentGoalNet(side: Side): Vec2 {
+  return { x: side === "home" ? GRID_COLS : -1, y: Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2) };
 }
 
 function ownGoal(side: Side): Vec2 {
@@ -55,7 +67,8 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
   const teammates = pawns.filter((p) => p.side === aiSide);
   const opponents = pawns.filter((p) => p.side !== aiSide);
   const carrier = teammates.find((p) => p.pos.x === ball.pos.x && p.pos.y === ball.pos.y) ?? null;
-  const goal = opponentGoal(aiSide);
+  const goalLine = opponentGoalLine(aiSide);
+  const goalNet = opponentGoalNet(aiSide);
   const home = ownGoal(aiSide);
 
   const closestChaserId = teammates
@@ -72,26 +85,26 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
     }
 
     if (carrier && pawn.id === carrier.id) {
-      if (dist(pawn.pos, goal) <= KICK_RANGE && hasClearLane(pawn.pos, goal, opponents)) {
-        return { ...pawn, plannedKick: goal, plannedPos: null };
+      if (dist(pawn.pos, goalNet) <= KICK_RANGE && hasClearLane(pawn.pos, goalNet, opponents)) {
+        return { ...pawn, plannedKick: goalNet, plannedPos: null };
       }
 
       const passTarget = teammates
         .filter((t) => t.id !== pawn.id && t.player.position !== "GK")
         .filter((t) => dist(pawn.pos, t.pos) <= KICK_RANGE && hasClearLane(pawn.pos, t.pos, opponents))
-        .filter((t) => dist(t.pos, goal) < dist(pawn.pos, goal) - 1)
-        .sort((a, b) => dist(a.pos, goal) - dist(b.pos, goal))[0];
+        .filter((t) => dist(t.pos, goalLine) < dist(pawn.pos, goalLine) - 1)
+        .sort((a, b) => dist(a.pos, goalLine) - dist(b.pos, goalLine))[0];
 
       if (passTarget) {
         return { ...pawn, plannedKick: passTarget.pos, plannedPos: null };
       }
 
-      return { ...pawn, plannedPos: moveToward(pawn.pos, goal, MOVE_RANGE), plannedKick: null };
+      return { ...pawn, plannedPos: moveToward(pawn.pos, goalLine, MOVE_RANGE), plannedKick: null };
     }
 
     if (carrier) {
       // Team has the ball: hold a supporting position a little further upfield.
-      return { ...pawn, plannedPos: moveToward(pawn.pos, goal, 1), plannedKick: null };
+      return { ...pawn, plannedPos: moveToward(pawn.pos, goalLine, 1), plannedKick: null };
     }
 
     if (pawn.id === closestChaserId) {

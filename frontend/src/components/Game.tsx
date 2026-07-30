@@ -7,11 +7,12 @@ import {
   GRID_ROWS,
   KICK_RANGE,
   MOVE_RANGE,
+  OOB_CELLS,
   TOTAL_TURNS,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
-import { createProjector, pointsAttr, VIEW_H, VIEW_W } from "../game/iso";
+import { createProjector, pointsAttr, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
 import type { Ball, Pawn, TeamDTO, Vec2 } from "../game/types";
 import { BallView } from "./BallView";
@@ -33,7 +34,12 @@ function chebyshevDistance(a: Vec2, b: Vec2): number {
 }
 
 function inBounds(pos: Vec2): boolean {
-  return pos.x >= 0 && pos.x < GRID_COLS && pos.y >= 0 && pos.y < GRID_ROWS;
+  return (
+    pos.x >= -OOB_CELLS &&
+    pos.x < GRID_COLS + OOB_CELLS &&
+    pos.y >= -OOB_CELLS &&
+    pos.y < GRID_ROWS + OOB_CELLS
+  );
 }
 
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
@@ -52,14 +58,22 @@ const ZOOM_MAX = 2.5;
 
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const rotateState = useRef<{ active: boolean; startX: number; startRotation: number }>({
+  const rotateState = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    startRotation: number;
+    startTilt: number;
+  }>({
     active: false,
     startX: 0,
+    startY: 0,
     startRotation: 0,
+    startTilt: TILT_DEFAULT,
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
-  const [camera, setCamera] = useState({ zoom: 1, rotation: 0 });
+  const [camera, setCamera] = useState({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT });
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
@@ -119,7 +133,13 @@ export function Game({ mode, onExitToMenu }: Props) {
     // Middle button (1) or the side "back"/"forward" buttons (3/4) orbit the camera.
     if (e.button !== 1 && e.button !== 3 && e.button !== 4) return;
     e.preventDefault();
-    rotateState.current = { active: true, startX: e.clientX, startRotation: camera.rotation };
+    rotateState.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startRotation: camera.rotation,
+      startTilt: camera.tilt,
+    };
     setIsRotating(true);
   }
 
@@ -127,8 +147,10 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (!rotateState.current.active) return;
     e.preventDefault();
     const dx = e.clientX - rotateState.current.startX;
-    const degrees = ((rotateState.current.startRotation + dx * 0.4) % 360 + 360) % 360;
-    setCamera((c) => ({ ...c, rotation: degrees }));
+    const dy = e.clientY - rotateState.current.startY;
+    const degrees = ((rotateState.current.startRotation + dx * 0.18) % 360 + 360) % 360;
+    const tilt = Math.min(TILT_MAX, Math.max(TILT_MIN, rotateState.current.startTilt + dy * 0.06));
+    setCamera((c) => ({ ...c, rotation: degrees, tilt }));
   }
 
   function stopRotating() {
@@ -138,10 +160,13 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function resetCamera() {
-    setCamera({ zoom: 1, rotation: 0 });
+    setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT });
   }
 
-  const projector = useMemo(() => createProjector(camera.rotation), [camera.rotation]);
+  const projector = useMemo(
+    () => createProjector(camera.rotation, camera.tilt),
+    [camera.rotation, camera.tilt]
+  );
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
@@ -263,8 +288,8 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   const cells = [];
-  for (let x = 0; x < GRID_COLS; x++) {
-    for (let y = 0; y < GRID_ROWS; y++) {
+  for (let x = -OOB_CELLS; x < GRID_COLS + OOB_CELLS; x++) {
+    for (let y = -OOB_CELLS; y < GRID_ROWS + OOB_CELLS; y++) {
       const isReachable = reachableCells.has(`${x},${y}`);
       cells.push(
         <polygon
@@ -380,7 +405,8 @@ export function Game({ mode, onExitToMenu }: Props) {
         ))}
       </ul>
       <p className="camera-hint">
-        Roda do mouse: zoom. Botão do meio (ou lateral) + arrastar: girar a câmera.
+        Roda do mouse: zoom. Botão do meio (ou lateral) + arrastar na horizontal: girar a câmera.
+        Arrastar na vertical: ajustar a inclinação.
       </p>
       <div
         className="field-viewport"
@@ -411,7 +437,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           ))}
         </svg>
       </div>
-      {(camera.zoom !== 1 || camera.rotation !== 0) && (
+      {(camera.zoom !== 1 || camera.rotation !== 0 || camera.tilt !== TILT_DEFAULT) && (
         <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
           Resetar câmera
         </button>

@@ -17,11 +17,16 @@ function isInGoalRows(y: number): boolean {
   return y >= GOAL_ROW_MIN && y <= GOAL_ROW_MAX;
 }
 
-/** Which side's net the ball is sitting in, if any. Home attacks toward the right edge. */
+/**
+ * Which side's net the ball is sitting in, if any. The pitch itself spans
+ * x in [0, GRID_COLS) — the goal line is the pitch edge, and the net is just
+ * beyond it, so scoring requires the ball to have actually crossed the line
+ * (x < 0 or x >= GRID_COLS), not merely reached the edge cell.
+ */
 function goalScoredAt(pos: Vec2): Side | null {
   if (!isInGoalRows(pos.y)) return null;
-  if (pos.x <= 0) return "away";
-  if (pos.x >= GRID_COLS - 1) return "home";
+  if (pos.x < 0) return "away";
+  if (pos.x >= GRID_COLS) return "home";
   return null;
 }
 
