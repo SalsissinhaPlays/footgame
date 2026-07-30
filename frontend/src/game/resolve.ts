@@ -66,7 +66,7 @@ function pickWinner(contestants: Pawn[]): Pawn {
 }
 
 /** Grid cells crossed in a straight line from `start` to `end`, excluding `start`. */
-function lineCells(start: Vec2, end: Vec2): Vec2[] {
+export function lineCells(start: Vec2, end: Vec2): Vec2[] {
   const dist = Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y), 1);
   const cells: Vec2[] = [];
   let lastKey: string | null = null;

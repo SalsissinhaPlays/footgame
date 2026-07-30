@@ -9,6 +9,7 @@ import {
   MOVE_RANGE,
   TOTAL_TURNS,
 } from "../game/constants";
+import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
 import { resolveTurn } from "../game/resolve";
 import type { Ball, Pawn, TeamDTO, Vec2 } from "../game/types";
@@ -36,10 +37,11 @@ function kickoffFormation(pawns: Pawn[]): Pawn[] {
 }
 
 interface Props {
+  mode: "hotseat" | "ai";
   onExitToMenu: () => void;
 }
 
-export function Game({ onExitToMenu }: Props) {
+export function Game({ mode, onExitToMenu }: Props) {
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
@@ -124,14 +126,11 @@ export function Game({ onExitToMenu }: Props) {
     setKickMode(false);
   }
 
-  async function handleProceed() {
-    if (resolving || matchOver) return;
-    setSelectedId(null);
-    setKickMode(false);
+  async function resolveWithPawns(inputPawns: Pawn[]) {
     setResolving(true);
     setEvents([]);
 
-    const { snapshots, events: turnEvents, goal } = resolveTurn(pawns, ball);
+    const { snapshots, events: turnEvents, goal } = resolveTurn(inputPawns, ball);
     for (const snapshot of snapshots) {
       setPawns(snapshot.pawns);
       setBall({ pos: snapshot.ball });
@@ -159,6 +158,12 @@ export function Game({ onExitToMenu }: Props) {
     setSelectedId(null);
     setKickMode(false);
 
+    if (mode === "ai") {
+      const withAiMoves = planAiTurn(pawns, ball, "away");
+      await resolveWithPawns(withAiMoves);
+      return;
+    }
+
     const next = new Set(readySides);
     next.add(controllingSide);
     setReadySides(next);
@@ -166,7 +171,7 @@ export function Game({ onExitToMenu }: Props) {
     if (next.size < 2) {
       setHandoff(true);
     } else {
-      await handleProceed();
+      await resolveWithPawns(pawns);
     }
   }
 
@@ -240,15 +245,21 @@ export function Game({ onExitToMenu }: Props) {
             Turno {Math.min(turn, TOTAL_TURNS)} / {TOTAL_TURNS}
           </span>
           <button type="button" onClick={handleReady} disabled={resolving || matchOver}>
-            {resolving ? "Resolvendo..." : "Pronto"}
+            {resolving ? "Resolvendo..." : mode === "ai" ? "Prosseguir" : "Pronto"}
           </button>
         </div>
       </div>
-      {!matchOver && (
+      {!matchOver && mode === "hotseat" && (
         <p className={`turn-indicator ${controllingSide}`}>Vez de: {controllingSideName}</p>
       )}
       {matchOver ? (
         <p className="result-banner">{resultText}</p>
+      ) : mode === "ai" ? (
+        <p className="hint">
+          Clique em um peão azul e depois em uma casa destacada para planejar o movimento. Quem
+          estiver em cima da bola a carrega ao se mover. Clique em "Prosseguir" para ver o que o
+          adversário (controlado pelo computador) faz.
+        </p>
       ) : (
         <p className="hint">
           Clique em um peão do time em controle e depois em uma casa destacada para planejar o

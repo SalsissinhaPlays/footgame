@@ -2,9 +2,10 @@ import "./menu.css";
 
 interface Props {
   onStartHotseat: () => void;
+  onStartAi: () => void;
 }
 
-export function MainMenu({ onStartHotseat }: Props) {
+export function MainMenu({ onStartHotseat, onStartAi }: Props) {
   return (
     <div className="menu-wrapper">
       <h1>EagleEye Interactive</h1>
@@ -14,9 +15,9 @@ export function MainMenu({ onStartHotseat }: Props) {
           Multiplayer local
           <span className="menu-button-desc">Dois jogadores no mesmo computador, revezando o controle de cada time</span>
         </button>
-        <button type="button" className="menu-button" disabled>
+        <button type="button" className="menu-button" onClick={onStartAi}>
           Jogar contra a IA
-          <span className="menu-button-desc">Em breve</span>
+          <span className="menu-button-desc">Você controla o time da casa contra um adversário controlado pelo computador</span>
         </button>
       </div>
     </div>
