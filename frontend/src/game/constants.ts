@@ -46,3 +46,8 @@ export const DEFLECTION_SPEED = BALL_SPEED * 0.5;
 export const DEFLECTION_ANGLE_SPREAD = (100 * Math.PI) / 180;
 export const ROLL_FRICTION = 0.45; // fraction of speed KEPT each tick
 export const ROLL_STOP_EPS = 0.15; // below this speed the ball is considered stopped
+
+// How close a loose ball has to roll to a pawn before they even get a
+// chance to react to it (see reactions.ts) and consider abandoning their
+// planned move to chase it down instead.
+export const REACT_RADIUS = 3;

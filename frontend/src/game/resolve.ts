@@ -9,12 +9,14 @@ import {
   GRID_COLS,
   KICK_RANGE,
   MOVE_RANGE,
+  REACT_RADIUS,
   ROLL_FRICTION,
   ROLL_START_SPEED,
   ROLL_STOP_EPS,
 } from "./constants";
 import { sampleLanding } from "./aim";
 import { resolveContest, resolveContestDetailed } from "./contest";
+import { attemptsReaction } from "./reactions";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
 
 export interface ResolveSnapshot {
@@ -313,11 +315,27 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
 
   // Each pawn's final destination for the turn; movement advances one cell
   // per tick toward it, so a pawn blocked mid-way keeps whatever progress it
-  // already made instead of losing the whole turn.
+  // already made instead of losing the whole turn. Reacting to a loose ball
+  // (below) overrides a pawn's entry here instead of needing its own
+  // movement path — it goes through the exact same candidateSteps/collision
+  // machinery as any planned move.
   const destinations = new Map(current.map((p) => [p.id, p.plannedPos ?? p.pos]));
   const stopped = new Set<string>();
+  // Pawns who've committed to chasing a loose ball instead of their planned
+  // move, and pawns who've already had their one-time chance to react (so a
+  // pawn that chose to ignore a loose ball isn't re-asked every tick it
+  // stays nearby — a flicker-free decision, not a live re-evaluation).
+  const chasingIds = new Set<string>();
+  const reactionDecided = new Set<string>();
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
+    // Chasers re-aim at the ball's last known position before this tick's
+    // movement resolves — one tick of "reaction time" behind where it
+    // actually is, same as a human noticing and then moving.
+    for (const id of chasingIds) {
+      destinations.set(id, { ...ballPos });
+    }
+
     const preTickPos = new Map(current.map((p) => [p.id, p.pos]));
     // Recomputed fresh every tick, since a blocker from an earlier tick may
     // have since moved out of the way.
@@ -500,6 +518,24 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     } else if (currentCarrierId) {
       const holder = current.find((p) => p.id === currentCarrierId);
       if (holder) ballPos = { ...holder.pos };
+    }
+
+    // Reactive layer: anyone close enough to a ball that's still loose after
+    // this tick's processing gets a one-time chance (gated by attributes) to
+    // abandon their planned move and chase it down instead. This runs
+    // whether the roll has existed for a while or was only just created this
+    // same tick (a deflection, or an unopposed kick coming to rest) — either
+    // way, a pawn already standing nearby should get to react to it.
+    if (roll) {
+      for (const p of current) {
+        if (p.id === roll.excludeId || chasingIds.has(p.id) || reactionDecided.has(p.id)) continue;
+        if (distance(p.pos, roll.pos) > REACT_RADIUS) continue;
+        reactionDecided.add(p.id);
+        if (attemptsReaction(p, "press_loose_ball")) {
+          chasingIds.add(p.id);
+          events.push(`${p.player.name} reage à bola solta`);
+        }
+      }
     }
 
     snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
