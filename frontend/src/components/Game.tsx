@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPlayers, fetchTeams } from "../game/api";
 import {
   BALL_START,
-  CELL_SIZE,
   GRID_COLS,
   GRID_ROWS,
   KICK_RANGE,
@@ -11,6 +10,7 @@ import {
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
+import { cellCorners, pointsAttr, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
 import type { Ball, Pawn, TeamDTO, Vec2 } from "../game/types";
 import { BallView } from "./BallView";
@@ -47,6 +47,8 @@ interface Props {
 }
 
 export function Game({ mode, onExitToMenu }: Props) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
@@ -76,6 +78,22 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
     load();
   }, []);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      setIsFullscreen(document.fullscreenElement === wrapperRef.current);
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrapperRef.current?.requestFullscreen();
+    }
+  }
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
@@ -201,12 +219,9 @@ export function Game({ mode, onExitToMenu }: Props) {
     for (let y = 0; y < GRID_ROWS; y++) {
       const isReachable = reachableCells.has(`${x},${y}`);
       cells.push(
-        <rect
+        <polygon
           key={`cell-${x}-${y}`}
-          x={x * CELL_SIZE}
-          y={y * CELL_SIZE}
-          width={CELL_SIZE}
-          height={CELL_SIZE}
+          points={pointsAttr(cellCorners(x, y))}
           className={`cell ${isReachable ? "reachable" : ""} ${isReachable && kickMode ? "kicking" : ""}`}
           onClick={() => handleCellClick({ x, y })}
         />
@@ -228,7 +243,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   if (handoff) {
     const nextSideName = controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
     return (
-      <div className="game-wrapper handoff-screen">
+      <div className="game-wrapper handoff-screen" ref={wrapperRef}>
         <h2>Passe o computador</h2>
         <p>
           Agora é a vez do <strong>{nextSideName}</strong> planejar seus movimentos.
@@ -241,15 +256,18 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   const controllingSideName = controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
-  const visiblePawns = pawns.map((p) =>
-    p.side === controllingSide ? p : { ...p, plannedPos: null, plannedKick: null }
-  );
+  const visiblePawns = pawns
+    .map((p) => (p.side === controllingSide ? p : { ...p, plannedPos: null, plannedKick: null }))
+    .sort((a, b) => a.pos.y - a.pos.x - (b.pos.y - b.pos.x));
 
   return (
-    <div className="game-wrapper">
+    <div className="game-wrapper" ref={wrapperRef}>
       <div className="game-header">
         <button type="button" className="exit-button" onClick={onExitToMenu}>
           ← Menu
+        </button>
+        <button type="button" className="exit-button" onClick={toggleFullscreen}>
+          {isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
         </button>
         <h1>
           {teams[0]?.name} <span className="score">{homeScore}</span>
@@ -313,10 +331,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           <li key={i}>{e}</li>
         ))}
       </ul>
-      <svg
-        viewBox={`0 0 ${GRID_COLS * CELL_SIZE} ${GRID_ROWS * CELL_SIZE}`}
-        className="field-svg"
-      >
+      <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="field-svg">
         <Field />
         {cells}
         <BallView ball={ball} />

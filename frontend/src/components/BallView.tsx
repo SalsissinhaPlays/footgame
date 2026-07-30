@@ -1,13 +1,14 @@
-import { CELL_SIZE } from "../game/constants";
+import { toIso } from "../game/iso";
 import type { Ball } from "../game/types";
 
 export function BallView({ ball }: { ball: Ball }) {
-  const cx = ball.pos.x * CELL_SIZE + CELL_SIZE / 2 + CELL_SIZE * 0.22;
-  const cy = ball.pos.y * CELL_SIZE + CELL_SIZE / 2 + CELL_SIZE * 0.22;
+  const base = toIso(ball.pos.x + 0.5, ball.pos.y + 0.5);
 
   return (
-    <g className="ball-wrapper" transform={`translate(${cx}, ${cy})`}>
-      <circle r={CELL_SIZE * 0.14} className="ball" />
+    <g className="ball-wrapper" transform={`translate(${base.x}, ${base.y})`}>
+      <ellipse cx={0} cy={0} rx={9} ry={4.5} className="ball-shadow" />
+      <circle cy={-11} r={7.5} className="ball" />
+      <path d="M -3 -14 L 3 -14 L 4 -9 L 0 -6 L -4 -9 Z" className="ball-pentagon" />
     </g>
   );
 }

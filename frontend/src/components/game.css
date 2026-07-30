@@ -1,8 +1,23 @@
 .game-wrapper {
-  max-width: 900px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 16px;
   font-family: system-ui, sans-serif;
+}
+
+.game-wrapper:fullscreen {
+  max-width: 100%;
+  width: 100vw;
+  height: 100vh;
+  background: #10140f;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.game-wrapper:fullscreen .field-svg {
+  flex: 1;
+  height: 100%;
 }
 
 .game-header {
@@ -158,44 +173,91 @@
 .field-svg {
   width: 100%;
   height: auto;
-  border-radius: 8px;
-  background: #3f9142;
+  border-radius: 10px;
+  background: #142616;
+  display: block;
 }
 
-.pitch-bg {
-  fill: #3f9142;
+/* --- Pitch --- */
+
+.pitch-base {
+  fill: #327a37;
 }
 
-.grid-line {
-  stroke: rgba(255, 255, 255, 0.12);
-  stroke-width: 1;
+.pitch-stripe {
+  stroke: none;
+}
+
+.pitch-stripe.light {
+  fill: #3b8a41;
+}
+
+.pitch-stripe.dark {
+  fill: #327a37;
 }
 
 .pitch-border {
-  stroke: rgba(255, 255, 255, 0.75);
-  stroke-width: 2;
   fill: none;
+  stroke: #f2f2f2;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.pitch-line {
+  fill: none;
+  stroke: #f2f2f2;
+  stroke-width: 2;
+  opacity: 0.9;
+}
+
+.pitch-spot {
+  fill: #f2f2f2;
+  opacity: 0.9;
 }
 
 .goal-area {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.75);
-  stroke-width: 2;
+  fill: rgba(255, 255, 255, 0.05);
 }
+
+.goal-frame line {
+  stroke: #eee;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.goal-net-back {
+  stroke: rgba(255, 255, 255, 0.35) !important;
+  stroke-width: 1.5 !important;
+  stroke-dasharray: 2 3;
+}
+
+/* --- Ball --- */
 
 .ball-wrapper {
   transition: transform 0.35s linear;
 }
 
+.ball-shadow {
+  fill: rgba(0, 0, 0, 0.4);
+}
+
 .ball {
-  fill: #fff8e1;
+  fill: #fdfaf0;
   stroke: #33291a;
-  stroke-width: 1.5;
+  stroke-width: 1.3;
   pointer-events: none;
 }
 
+.ball-pentagon {
+  fill: #33291a;
+  pointer-events: none;
+}
+
+/* --- Cells --- */
+
 .cell {
   fill: transparent;
+  stroke: rgba(255, 255, 255, 0.05);
   cursor: default;
 }
 
@@ -208,32 +270,64 @@
   fill: rgba(239, 108, 0, 0.28);
 }
 
+/* --- Pawns (2.5D humanoid tokens) --- */
+
 .pawn {
   cursor: pointer;
   transition: transform 0.35s linear;
 }
 
-.pawn-circle {
+.pawn-shadow {
+  fill: rgba(0, 0, 0, 0.4);
+}
+
+.pawn-leg {
   stroke: rgba(0, 0, 0, 0.4);
+  stroke-width: 1;
+}
+
+.pawn-leg.home {
+  fill: #16305c;
+}
+
+.pawn-leg.away {
+  fill: #5c1414;
+}
+
+.pawn-torso {
+  stroke: rgba(0, 0, 0, 0.5);
   stroke-width: 1.5;
 }
 
-.pawn-circle.home {
-  fill: #1565c0;
+.pawn-torso.home {
+  fill: url(#pawn-body-home);
 }
 
-.pawn-circle.away {
-  fill: #c62828;
+.pawn-torso.away {
+  fill: url(#pawn-body-away);
 }
 
-.pawn-circle.selected {
+.pawn-torso.selected {
   stroke: #ffeb3b;
-  stroke-width: 3;
+  stroke-width: 2.5;
+}
+
+.pawn-head {
+  fill: #e3ad80;
+  stroke: rgba(0, 0, 0, 0.4);
+  stroke-width: 1;
+}
+
+.pawn-select-ring {
+  fill: none;
+  stroke: #ffeb3b;
+  stroke-width: 2;
+  stroke-dasharray: 3 2;
 }
 
 .pawn-number {
   fill: white;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 700;
   pointer-events: none;
 }
