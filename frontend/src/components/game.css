@@ -184,6 +184,10 @@
   fill: #327a37;
 }
 
+.grass-image {
+  filter: saturate(0.75) brightness(0.9) contrast(0.95);
+}
+
 .pitch-border {
   fill: none;
   stroke: #f2f2f2;
@@ -238,12 +242,15 @@
 }
 
 .cell.reachable {
-  fill: rgba(255, 255, 255, 0.22);
+  fill: rgba(255, 255, 100, 0.3);
+  stroke: rgba(255, 255, 120, 0.9);
+  stroke-width: 1.5;
   cursor: pointer;
 }
 
 .cell.kicking {
-  fill: rgba(239, 108, 0, 0.28);
+  fill: rgba(255, 140, 0, 0.35);
+  stroke: rgba(255, 160, 40, 0.95);
 }
 
 /* --- Pawns (2.5D humanoid tokens) --- */

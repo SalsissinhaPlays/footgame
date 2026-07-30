@@ -54,11 +54,11 @@ export function Field() {
           <stop offset="85%" stopColor="#0a1f0c" stopOpacity="0" />
           <stop offset="100%" stopColor="#0a1f0c" stopOpacity="0.3" />
         </linearGradient>
-        <pattern id="grass-light-tex" patternUnits="userSpaceOnUse" width="260" height="260">
-          <image href="/sprites/grass_light.png" width="260" height="260" />
+        <pattern id="grass-light-tex" patternUnits="userSpaceOnUse" width="480" height="480">
+          <image href="/sprites/grass_light.png" width="480" height="480" className="grass-image" />
         </pattern>
-        <pattern id="grass-dark-tex" patternUnits="userSpaceOnUse" width="260" height="260">
-          <image href="/sprites/grass_dark.png" width="260" height="260" />
+        <pattern id="grass-dark-tex" patternUnits="userSpaceOnUse" width="480" height="480">
+          <image href="/sprites/grass_dark.png" width="480" height="480" className="grass-image" />
         </pattern>
       </defs>
 
