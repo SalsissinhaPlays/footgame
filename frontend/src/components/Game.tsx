@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
 import { fetchPlayers, fetchTeams } from "../game/api";
 import {
@@ -12,12 +12,12 @@ import {
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
-import { createProjector, pointsAttr, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
+import { TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
 import type { Ball, Pawn, TeamDTO, Vec2 } from "../game/types";
-import { BallView } from "./BallView";
-import { Field } from "./Field";
-import { PawnView } from "./PawnView";
+import type { MatchCallbacks } from "../phaser/MatchScene";
+import { MatchScene } from "../phaser/MatchScene";
+import { PhaserGame } from "../phaser/PhaserGame";
 import "./game.css";
 
 function sleep(ms: number): Promise<void> {
@@ -58,6 +58,8 @@ const ZOOM_MAX = 2.5;
 
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const sceneRef = useRef<MatchScene | null>(null);
+  const handlersRef = useRef<MatchCallbacks>({ onPawnClick: () => {}, onCellClick: () => {} });
   const rotateState = useRef<{
     active: boolean;
     startX: number;
@@ -72,7 +74,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     startTilt: TILT_DEFAULT,
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
   const [camera, setCamera] = useState({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT });
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
@@ -140,7 +142,6 @@ export function Game({ mode, onExitToMenu }: Props) {
       startRotation: camera.rotation,
       startTilt: camera.tilt,
     };
-    setIsRotating(true);
   }
 
   function handleViewportMouseMove(e: ReactMouseEvent) {
@@ -154,25 +155,18 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function stopRotating() {
-    if (!rotateState.current.active) return;
     rotateState.current.active = false;
-    setIsRotating(false);
   }
 
   function resetCamera() {
     setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT });
   }
 
-  const projector = useMemo(
-    () => createProjector(camera.rotation, camera.tilt),
-    [camera.rotation, camera.tilt]
-  );
-
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
   const selectedIsCarrier = !!selectedPawn && isCarrier(selectedPawn);
 
-  const reachableCells = useMemo(() => {
+  const reachableCells = (() => {
     if (!selectedPawn) return new Set<string>();
     const range = kickMode && selectedIsCarrier ? KICK_RANGE : MOVE_RANGE;
     const cells = new Set<string>();
@@ -185,7 +179,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       }
     }
     return cells;
-  }, [selectedPawn, kickMode, selectedIsCarrier]);
+  })();
 
   function handlePawnClick(pawn: Pawn) {
     if (resolving || matchOver) return;
@@ -221,6 +215,39 @@ export function Game({ mode, onExitToMenu }: Props) {
     setSelectedId(null);
     setKickMode(false);
   }
+
+  // Keep the Phaser-facing callbacks stable (set once when the scene mounts)
+  // while always delegating to the latest closures via this ref.
+  useEffect(() => {
+    handlersRef.current = {
+      onPawnClick: (pawnId: string) => {
+        const pawn = pawns.find((p) => p.id === pawnId);
+        if (pawn) handlePawnClick(pawn);
+      },
+      onCellClick: handleCellClick,
+    };
+  });
+
+  function handleSceneReady(scene: MatchScene) {
+    sceneRef.current = scene;
+    scene.setCallbacks({
+      onPawnClick: (pawnId) => handlersRef.current.onPawnClick(pawnId),
+      onCellClick: (cell) => handlersRef.current.onCellClick(cell),
+    });
+    setSceneReady(true);
+  }
+
+  useEffect(() => {
+    sceneRef.current?.syncState({
+      pawns,
+      ball,
+      selectedId,
+      reachableCells,
+      kickMode,
+      controllingSide,
+      camera,
+    });
+  });
 
   async function resolveWithPawns(inputPawns: Pawn[]) {
     setResolving(true);
@@ -287,21 +314,6 @@ export function Game({ mode, onExitToMenu }: Props) {
     setHandoff(false);
   }
 
-  const cells = [];
-  for (let x = -OOB_CELLS; x < GRID_COLS + OOB_CELLS; x++) {
-    for (let y = -OOB_CELLS; y < GRID_ROWS + OOB_CELLS; y++) {
-      const isReachable = reachableCells.has(`${x},${y}`);
-      cells.push(
-        <polygon
-          key={`cell-${x}-${y}`}
-          points={pointsAttr(projector.cellCorners(x, y))}
-          className={`cell ${isReachable ? "reachable" : ""} ${isReachable && kickMode ? "kicking" : ""}`}
-          onClick={() => handleCellClick({ x, y })}
-        />
-      );
-    }
-  }
-
   if (loading) {
     return <p>Carregando times...</p>;
   }
@@ -329,9 +341,6 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   const controllingSideName = controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
-  const visiblePawns = pawns
-    .map((p) => (p.side === controllingSide ? p : { ...p, plannedPos: null, plannedKick: null }))
-    .sort((a, b) => projector.toIso(a.pos.x, a.pos.y).y - projector.toIso(b.pos.x, b.pos.y).y);
 
   return (
     <div className="game-wrapper" ref={wrapperRef}>
@@ -418,24 +427,8 @@ export function Game({ mode, onExitToMenu }: Props) {
         onMouseLeave={stopRotating}
         onAuxClick={(e) => e.preventDefault()}
       >
-        <svg
-          viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-          className={`field-svg ${isRotating ? "no-transitions" : ""}`}
-          style={{ transform: `scale(${camera.zoom})` }}
-        >
-          <Field projector={projector} />
-          {cells}
-          <BallView ball={ball} projector={projector} />
-          {visiblePawns.map((pawn) => (
-            <PawnView
-              key={pawn.id}
-              pawn={pawn}
-              selected={pawn.id === selectedId}
-              onClick={() => handlePawnClick(pawn)}
-              projector={projector}
-            />
-          ))}
-        </svg>
+        {!sceneReady && <p className="hint">Carregando o campo...</p>}
+        <PhaserGame onSceneReady={handleSceneReady} />
       </div>
       {(camera.zoom !== 1 || camera.rotation !== 0 || camera.tilt !== TILT_DEFAULT) && (
         <button type="button" className="exit-button camera-reset" onClick={resetCamera}>

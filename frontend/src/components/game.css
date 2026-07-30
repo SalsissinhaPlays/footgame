@@ -181,13 +181,18 @@
   cursor: grabbing;
 }
 
-.field-svg {
+.phaser-container {
   width: 100%;
   height: 100%;
   background: #142616;
   display: block;
-  transform-origin: center center;
-  will-change: transform;
+  line-height: 0;
+}
+
+.phaser-container canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .camera-reset {
@@ -198,180 +203,4 @@
   color: #888;
   font-size: 12px;
   margin: 0 0 6px;
-}
-
-.field-svg.no-transitions .pawn,
-.field-svg.no-transitions .ball-wrapper {
-  transition: none;
-}
-
-/* --- Pitch --- */
-
-.pitch-base {
-  fill: #327a37;
-}
-
-.grass-image {
-  filter: saturate(0.75) brightness(0.9) contrast(0.95);
-}
-
-.pitch-border {
-  fill: none;
-  stroke: #f2f2f2;
-  stroke-width: 2.5;
-  stroke-linejoin: round;
-}
-
-.pitch-line {
-  fill: none;
-  stroke: #f2f2f2;
-  stroke-width: 2;
-  opacity: 0.9;
-}
-
-.pitch-spot {
-  fill: #f2f2f2;
-  opacity: 0.9;
-}
-
-.pitch-apron {
-  fill: #2c6b31;
-}
-
-.pitch-apron-border {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.35);
-  stroke-width: 1.5;
-}
-
-.goal-net {
-  fill: rgba(15, 15, 15, 0.4);
-}
-
-.net-mesh-bg {
-  fill: rgba(8, 10, 8, 0.45);
-}
-
-.net-mesh-line {
-  stroke: rgba(255, 255, 255, 0.55);
-  stroke-width: 1;
-}
-
-.goal-net-panel {
-  fill: url(#net-mesh);
-  stroke: none;
-}
-
-.goal-post,
-.goal-crossbar {
-  stroke: #f7f7f7;
-  stroke-width: 5;
-  stroke-linecap: round;
-}
-
-.goal-crossbar {
-  stroke-width: 4.5;
-}
-
-/* --- Ball --- */
-
-.ball-wrapper {
-  transition: transform 0.35s linear;
-}
-
-.ball-shadow {
-  fill: rgba(0, 0, 0, 0.4);
-}
-
-/* --- Cells --- */
-
-.cell {
-  fill: transparent;
-  stroke: rgba(255, 255, 255, 0.05);
-  cursor: default;
-}
-
-.cell.reachable {
-  fill: rgba(255, 255, 100, 0.3);
-  stroke: rgba(255, 255, 120, 0.9);
-  stroke-width: 1.5;
-  cursor: pointer;
-}
-
-.cell.kicking {
-  fill: rgba(255, 140, 0, 0.35);
-  stroke: rgba(255, 160, 40, 0.95);
-}
-
-/* --- Pawns (2.5D humanoid tokens) --- */
-
-.pawn {
-  cursor: pointer;
-  transition: transform 0.35s linear;
-}
-
-.pawn-shadow {
-  fill: rgba(0, 0, 0, 0.5);
-}
-
-.pawn-sprite {
-  pointer-events: none;
-}
-
-.pawn-select-ring {
-  fill: rgba(255, 235, 59, 0.25);
-  stroke: #ffeb3b;
-  stroke-width: 2;
-}
-
-.pawn-badge {
-  stroke: rgba(0, 0, 0, 0.6);
-  stroke-width: 1;
-}
-
-.pawn-badge.home {
-  fill: #1565c0;
-}
-
-.pawn-badge.away {
-  fill: #c62828;
-}
-
-.pawn-number {
-  fill: white;
-  font-size: 11px;
-  font-weight: 700;
-  pointer-events: none;
-}
-
-.move-arrow {
-  stroke: #ffeb3b;
-  stroke-width: 2.5;
-  stroke-dasharray: 4 3;
-}
-
-.pawn-ghost {
-  fill-opacity: 0.35;
-  stroke: #ffeb3b;
-  stroke-width: 2;
-}
-
-.pawn-ghost.home {
-  fill: #1565c0;
-}
-
-.pawn-ghost.away {
-  fill: #c62828;
-}
-
-.kick-arrow {
-  stroke: #ef6c00;
-  stroke-width: 3;
-  stroke-dasharray: 2 4;
-}
-
-.kick-target {
-  fill: #ef6c00;
-  stroke: #33291a;
-  stroke-width: 1;
 }
