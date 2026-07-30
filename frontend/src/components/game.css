@@ -10,14 +10,92 @@
   width: 100vw;
   height: 100vh;
   background: #10140f;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
+  position: relative;
+  overflow: hidden;
 }
 
+/* The field takes the entire screen; every other control is an absolutely
+   positioned overlay floating on top of it (see below), rather than sharing
+   space in a flex layout — that's what was shrinking the playable area and
+   letting camera angles push pitch content up behind the header before. */
 .game-wrapper:fullscreen .field-viewport {
-  flex: 1;
+  position: absolute;
+  inset: 0;
+  width: 100%;
   height: 100%;
+}
+
+/* Instructional text isn't needed once the player is already immersed in
+   fullscreen — hiding it frees up screen space. */
+.game-wrapper:fullscreen .hint,
+.game-wrapper:fullscreen .camera-hint {
+  display: none;
+}
+
+.game-wrapper:fullscreen .game-header,
+.game-wrapper:fullscreen .turn-indicator,
+.game-wrapper:fullscreen .kick-toggle,
+.game-wrapper:fullscreen .events-log,
+.game-wrapper:fullscreen .camera-reset,
+.game-wrapper:fullscreen .result-banner {
+  position: absolute;
+  z-index: 5;
+  background: transparent;
+  margin: 0;
+}
+
+.game-wrapper:fullscreen .game-header {
+  top: 16px;
+  left: 16px;
+  right: 16px;
+}
+
+/* Text floating directly over the pitch needs a shadow to stay legible
+   against grass of any shade, since there's no solid bar behind it anymore. */
+.game-wrapper:fullscreen .game-header h1,
+.game-wrapper:fullscreen .game-info span,
+.game-wrapper:fullscreen .turn-indicator,
+.game-wrapper:fullscreen .kick-toggle span {
+  text-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.85),
+    0 0 2px rgba(0, 0, 0, 0.6);
+}
+
+.game-wrapper:fullscreen .turn-indicator {
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.game-wrapper:fullscreen .kick-toggle {
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.game-wrapper:fullscreen .events-log {
+  top: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 480px;
+}
+
+.game-wrapper:fullscreen .events-log.empty {
+  display: none;
+}
+
+.game-wrapper:fullscreen .camera-reset {
+  bottom: 16px;
+  left: 16px;
+}
+
+.game-wrapper:fullscreen .result-banner {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 16px 32px;
+  border-radius: 10px;
 }
 
 .game-header {
@@ -34,6 +112,7 @@
   border-radius: 5px;
   border: 1px solid #999;
   background: white;
+  color: #222;
   cursor: pointer;
 }
 

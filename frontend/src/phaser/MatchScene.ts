@@ -6,7 +6,14 @@ import {
   GRID_ROWS,
   OOB_CELLS,
 } from "../game/constants";
-import { createProjector, GOAL_NET_DEPTH, OOB_MARGIN, type Projector } from "../game/iso";
+import {
+  createProjector,
+  GOAL_NET_DEPTH,
+  OOB_MARGIN,
+  VIEW_H,
+  VIEW_W,
+  type Projector,
+} from "../game/iso";
 import type { Ball, Pawn, Side, Vec2 } from "../game/types";
 import { EventBus } from "./EventBus";
 
@@ -39,7 +46,6 @@ function spriteKeyFor(pawn: Pawn): string {
 
 interface PawnVisual {
   container: Phaser.GameObjects.Container;
-  shadow: Phaser.GameObjects.Ellipse;
   sprite: Phaser.GameObjects.Image;
   badgeBg: Phaser.GameObjects.Arc;
   badgeText: Phaser.GameObjects.Text;
@@ -49,6 +55,7 @@ interface PawnVisual {
 export class MatchScene extends Phaser.Scene {
   private projector!: Projector;
   private fieldGfx!: Phaser.GameObjects.Graphics;
+  private linesGfx!: Phaser.GameObjects.Graphics;
   private cellsGfx!: Phaser.GameObjects.Graphics;
   private cellZones = new Map<string, Phaser.GameObjects.Zone>();
   private overlayGfx!: Phaser.GameObjects.Graphics;
@@ -61,6 +68,10 @@ export class MatchScene extends Phaser.Scene {
   private callbacks: MatchCallbacks | null = null;
   private lastRotation: number | null = null;
   private lastTilt: number | null = null;
+  // Scale needed to fit the fixed-size isometric world into the actual
+  // canvas size, which now varies with the container (see PhaserGame.tsx's
+  // RESIZE scale mode) instead of always matching VIEW_W/VIEW_H exactly.
+  private fitZoom = 1;
 
   constructor() {
     super("MatchScene");
@@ -71,13 +82,12 @@ export class MatchScene extends Phaser.Scene {
     this.load.image("player_away", "/sprites/player_away.png");
     this.load.image("player_gk", "/sprites/player_gk.png");
     this.load.image("ball", "/sprites/ball.png");
-    this.load.image("grass_light", "/sprites/grass_light.png");
-    this.load.image("grass_dark", "/sprites/grass_dark.png");
   }
 
   create() {
     this.projector = createProjector(0, 0);
     this.fieldGfx = this.add.graphics();
+    this.linesGfx = this.add.graphics();
     this.cellsGfx = this.add.graphics();
     this.overlayGfx = this.add.graphics();
 
@@ -86,12 +96,25 @@ export class MatchScene extends Phaser.Scene {
 
     this.buildCellZones();
 
+    this.handleResize(this.scale.gameSize);
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.handleResize, this);
+    });
+
     this.setCallbacks = this.setCallbacks.bind(this);
     EventBus.emit("current-scene-ready", this);
   }
 
   setCallbacks(callbacks: MatchCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  /** Keeps the fixed-size isometric world fitted and centered as the real canvas size changes. */
+  private handleResize(gameSize: { width: number; height: number }) {
+    this.fitZoom = Math.min(gameSize.width / VIEW_W, gameSize.height / VIEW_H);
+    this.cameras.main.setZoom(this.fitZoom * (this.state?.camera.zoom ?? 1));
+    this.cameras.main.centerOn(VIEW_W / 2, VIEW_H / 2);
   }
 
   /** Called by React whenever pawns/ball/selection/camera change. Safe to call every render. */
@@ -108,7 +131,7 @@ export class MatchScene extends Phaser.Scene {
       this.rebuildCellZones();
     }
 
-    this.cameras.main.setZoom(state.camera.zoom);
+    this.cameras.main.setZoom(this.fitZoom * state.camera.zoom);
     this.updateCellHighlights();
     this.updatePawns();
     this.updateBall();
@@ -149,37 +172,60 @@ export class MatchScene extends Phaser.Scene {
     g.fillStyle(0x327a37, 1);
     fillPoly(g, outer);
 
+    const lg = this.linesGfx;
+    lg.clear();
+
+    // Checkerboard fill (alternating per cell, not per row) plus a scatter of
+    // small, fixed-position speckles per cell to fake grass-blade texture —
+    // both computed directly from this cell's own already-rotated corner
+    // points (via bilinear), the same ones the checker/outline/lines below
+    // use, so this can never drift out of sync with the rest of the field
+    // under rotation (unlike the earlier masked-texture attempt).
+    const SPECKS_PER_CELL = 5;
     for (let row = 0; row < GRID_ROWS; row++) {
-      const band = [
-        p.toIso(0, row),
-        p.toIso(GRID_COLS, row),
-        p.toIso(GRID_COLS, row + 1),
-        p.toIso(0, row + 1),
-      ];
-      g.fillStyle(row % 2 === 0 ? 0x3b8a41 : 0x327a37, 1);
-      fillPoly(g, band);
+      for (let col = 0; col < GRID_COLS; col++) {
+        const cell = [
+          p.toIso(col, row),
+          p.toIso(col + 1, row),
+          p.toIso(col + 1, row + 1),
+          p.toIso(col, row + 1),
+        ];
+        lg.fillStyle((row + col) % 2 === 0 ? 0x3b8a41 : 0x327a37, 1);
+        fillPoly(lg, cell);
+
+        for (let i = 0; i < SPECKS_PER_CELL; i++) {
+          const seed = row * 1000 + col * 17 + i * 3.7;
+          const u = seededRandom(seed);
+          const v = seededRandom(seed + 0.5);
+          const pt = bilinear(cell, u, v);
+          const darker = seededRandom(seed + 1.5) > 0.5;
+          const radius = 1.2 + seededRandom(seed + 2) * 1.6;
+          lg.fillStyle(darker ? 0x0d2410 : 0x5ca865, 0.1);
+          lg.fillCircle(pt.x, pt.y, radius);
+        }
+      }
     }
 
-    g.lineStyle(2.5, 0xf2f2f2, 0.9);
-    strokePoly(g, outer, true);
-    g.lineStyle(1.5, 0xffffff, 0.35);
-    strokePoly(g, apron, true);
+    lg.lineStyle(2.5, 0xf2f2f2, 0.9);
+    strokePoly(lg, outer, true);
+    lg.lineStyle(1.5, 0xffffff, 0.35);
+    strokePoly(lg, apron, true);
 
     const halfTop = p.toIso(GRID_COLS / 2, 0);
     const halfBottom = p.toIso(GRID_COLS / 2, GRID_ROWS);
-    g.lineStyle(2, 0xf2f2f2, 0.9);
-    g.lineBetween(halfTop.x, halfTop.y, halfBottom.x, halfBottom.y);
+    lg.lineStyle(2, 0xf2f2f2, 0.9);
+    lg.lineBetween(halfTop.x, halfTop.y, halfBottom.x, halfBottom.y);
 
     const circlePts: Vec2[] = [];
     for (let i = 0; i <= 40; i++) {
       const a = (i / 40) * Math.PI * 2;
       circlePts.push(p.toIso(GRID_COLS / 2 + Math.cos(a) * 1.7, GRID_ROWS / 2 + Math.sin(a) * 1.7));
     }
-    strokePoly(g, circlePts, false);
+    strokePoly(lg, circlePts, false);
 
     const centerSpot = p.toIso(GRID_COLS / 2, GRID_ROWS / 2);
-    g.fillStyle(0xf2f2f2, 0.9);
-    g.fillCircle(centerSpot.x, centerSpot.y, 2.5);
+    lg.fillStyle(0xf2f2f2, 0.9);
+    lg.fillCircle(centerSpot.x, centerSpot.y, 2.5);
 
     function box(x0: number, depth: number, pad: number): Vec2[] {
       const x1 = x0 === 0 ? depth : GRID_COLS - depth;
@@ -189,16 +235,16 @@ export class MatchScene extends Phaser.Scene {
     }
 
     for (const x0 of [0, GRID_COLS]) {
-      g.lineStyle(2, 0xf2f2f2, 0.9);
-      strokePoly(g, box(x0, PENALTY_DEPTH, PENALTY_PAD), true);
-      strokePoly(g, box(x0, SIX_YARD_DEPTH, 0), true);
+      lg.lineStyle(2, 0xf2f2f2, 0.9);
+      strokePoly(lg, box(x0, PENALTY_DEPTH, PENALTY_PAD), true);
+      strokePoly(lg, box(x0, SIX_YARD_DEPTH, 0), true);
       const spotX = x0 === 0 ? PENALTY_DEPTH - 0.4 : GRID_COLS - PENALTY_DEPTH + 0.4;
       const spot = p.toIso(spotX, GRID_ROWS / 2);
-      g.fillCircle(spot.x, spot.y, 2.5);
+      lg.fillCircle(spot.x, spot.y, 2.5);
     }
 
     for (const atHome of [true, false]) {
-      this.drawGoalFrame(g, atHome);
+      this.drawGoalFrame(lg, atHome);
     }
   }
 
@@ -302,7 +348,13 @@ export class MatchScene extends Phaser.Scene {
 
   private createPawnVisual(pawn: Pawn): PawnVisual {
     const container = this.add.container(0, 0);
-    const shadow = this.add.ellipse(0, 0, 40, 20, 0x000000, 0.4);
+    // Two soft, stacked ellipses (rather than one hard-edged shape) approximate
+    // a blurred contact shadow directly under the sprite's feet — this is the
+    // main cue that reads as "standing on the ground" for a flat billboard
+    // sprite over an isometric plane; without it the pitch's texture/checker
+    // pattern alone isn't enough to sell the contact point.
+    const shadowOuter = this.add.ellipse(0, 0, 34, 14, 0x000000, 0.16);
+    const shadowInner = this.add.ellipse(0, 0, 20, 8, 0x000000, 0.22);
     const sprite = this.add
       .image(0, -SPRITE_HEIGHT / 2, spriteKeyFor(pawn))
       .setDisplaySize(SPRITE_WIDTH, SPRITE_HEIGHT)
@@ -318,7 +370,7 @@ export class MatchScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0.5);
 
-    container.add([shadow, sprite, badgeBg, badgeText]);
+    container.add([shadowOuter, shadowInner, sprite, badgeBg, badgeText]);
     container.setSize(SPRITE_WIDTH, SPRITE_HEIGHT);
     container.setInteractive(
       new Phaser.Geom.Rectangle(-SPRITE_WIDTH / 2, -SPRITE_HEIGHT, SPRITE_WIDTH, SPRITE_HEIGHT),
@@ -326,7 +378,7 @@ export class MatchScene extends Phaser.Scene {
     );
     container.on("pointerdown", () => this.callbacks?.onPawnClick(pawn.id));
 
-    return { container, shadow, sprite, badgeBg, badgeText, lastGridPos: { ...pawn.pos } };
+    return { container, sprite, badgeBg, badgeText, lastGridPos: { ...pawn.pos } };
   }
 
   private applyPawnPosition(visual: PawnVisual, gridPos: Vec2) {
@@ -424,4 +476,27 @@ function strokePoly(g: Phaser.GameObjects.Graphics, points: Vec2[], closed: bool
   for (let i = 1; i < points.length; i++) g.lineTo(points[i].x, points[i].y);
   if (closed) g.closePath();
   g.strokePath();
+}
+
+// Deterministic pseudo-random in [0, 1) — same seed always gives the same
+// value, so the grass speckle pattern below is stable across redraws
+// (camera rotation/tilt changes) instead of re-randomizing and shimmering.
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function lerpPoint(a: Vec2, b: Vec2, t: number): Vec2 {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+// Maps a (u, v) point in a cell's local [0,1]x[0,1] space to screen space via
+// the cell's four already-projected (rotated/tilted) isometric corners —
+// this is what lets speckles sit correctly inside a skewed diamond cell
+// under any camera angle, using the exact same projected points as the
+// checkerboard/outline drawing, so it can never fall out of sync with them.
+function bilinear(corners: Vec2[], u: number, v: number): Vec2 {
+  const top = lerpPoint(corners[0], corners[1], u);
+  const bottom = lerpPoint(corners[3], corners[2], u);
+  return lerpPoint(top, bottom, v);
 }

@@ -149,7 +149,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     e.preventDefault();
     const dx = e.clientX - rotateState.current.startX;
     const dy = e.clientY - rotateState.current.startY;
-    const degrees = ((rotateState.current.startRotation + dx * 0.18) % 360 + 360) % 360;
+    const degrees = ((rotateState.current.startRotation - dx * 0.18) % 360 + 360) % 360;
     const tilt = Math.min(TILT_MAX, Math.max(TILT_MIN, rotateState.current.startTilt + dy * 0.06));
     setCamera((c) => ({ ...c, rotation: degrees, tilt }));
   }
@@ -419,7 +419,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       </p>
       <div
         className="field-viewport"
-        style={{ aspectRatio: `${VIEW_W} / ${VIEW_H}` }}
+        style={isFullscreen ? undefined : { aspectRatio: `${VIEW_W} / ${VIEW_H}` }}
         onWheel={handleWheel}
         onMouseDown={handleViewportMouseDown}
         onMouseMove={handleViewportMouseMove}

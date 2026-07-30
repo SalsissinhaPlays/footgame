@@ -26,11 +26,16 @@ export const PhaserGame = forwardRef<PhaserGameHandle, Props>(function PhaserGam
       type: Phaser.AUTO,
       parent: containerRef.current,
       transparent: true,
-      width: VIEW_W,
-      height: VIEW_H,
       scale: {
-        mode: Phaser.Scale.FIT,
-        autoCenter: Phaser.Scale.CENTER_BOTH,
+        // RESIZE (rather than FIT) makes the canvas always exactly match the
+        // container's real pixel size — no letterbox bars from a CSS-scaled
+        // fixed-resolution canvas. MatchScene handles fitting the fixed-size
+        // isometric world into whatever that size turns out to be, so the
+        // pitch fills any device's screen/window shape instead of always
+        // rendering at one aspect ratio.
+        mode: Phaser.Scale.RESIZE,
+        width: containerRef.current.clientWidth || VIEW_W,
+        height: containerRef.current.clientHeight || VIEW_H,
       },
       scene: [MatchScene],
     };
@@ -55,6 +60,26 @@ export const PhaserGame = forwardRef<PhaserGameHandle, Props>(function PhaserGam
       EventBus.off("current-scene-ready", handleSceneReady);
     };
   }, [onSceneReady]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    // Phaser's RESIZE scale mode only reacts to window 'resize' events on its
+    // own — it doesn't notice the parent container changing size on its own
+    // (e.g. entering fullscreen, or a CSS layout change with no window
+    // resize). Watch the container directly and drive the resize ourselves.
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) {
+        gameRef.current?.scale.resize(width, height);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   return <div ref={containerRef} className="phaser-container" />;
 });
