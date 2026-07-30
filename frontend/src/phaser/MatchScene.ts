@@ -35,8 +35,11 @@ export interface MatchCallbacks {
 const SIX_YARD_DEPTH = 1.2;
 const PENALTY_DEPTH = 2.6;
 const PENALTY_PAD = 1.5;
-const SPRITE_HEIGHT = 108;
-const SPRITE_WIDTH = SPRITE_HEIGHT * 0.55;
+const SPRITE_HEIGHT = 90;
+// The new pixel-art sprite set is narrower than the old set (~0.40-0.48
+// width:height across the three files, vs. the old ~0.55) — this average
+// keeps all three close to their real proportions instead of stretching them.
+const SPRITE_WIDTH = SPRITE_HEIGHT * 0.44;
 const TWEEN_MS = 350;
 
 function spriteKeyFor(pawn: Pawn): string {
