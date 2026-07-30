@@ -7,7 +7,11 @@ interface Props {
   onClick: () => void;
 }
 
-const SPRITE_SIZE = 92;
+// Sprites are pre-cropped tight to the character (feet at the bottom edge,
+// head at the top), at a fixed 0.55 width:height ratio — see the crop script
+// used when the art was integrated.
+const SPRITE_HEIGHT = 108;
+const SPRITE_WIDTH = SPRITE_HEIGHT * 0.55;
 
 function spriteFor(pawn: Pawn): string {
   if (pawn.player.position === "GK") return "/sprites/player_gk.png";
@@ -22,7 +26,7 @@ export function PawnView({ pawn, selected, onClick }: Props) {
     : null;
   const kickTarget = pawn.plannedKick ? toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5) : null;
 
-  const badgeY = -SPRITE_SIZE - 6;
+  const badgeY = -SPRITE_HEIGHT - 6;
 
   return (
     <g onClick={onClick} className="pawn" transform={`translate(${base.x}, ${base.y})`}>
@@ -50,10 +54,10 @@ export function PawnView({ pawn, selected, onClick }: Props) {
 
       <image
         href={spriteFor(pawn)}
-        x={-SPRITE_SIZE / 2}
-        y={-SPRITE_SIZE}
-        width={SPRITE_SIZE}
-        height={SPRITE_SIZE}
+        x={-SPRITE_WIDTH / 2}
+        y={-SPRITE_HEIGHT}
+        width={SPRITE_WIDTH}
+        height={SPRITE_HEIGHT}
         className="pawn-sprite"
         preserveAspectRatio="xMidYMax meet"
       />
