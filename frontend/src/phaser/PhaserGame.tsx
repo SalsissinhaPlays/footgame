@@ -21,10 +21,29 @@ export const PhaserGame = forwardRef<PhaserGameHandle, Props>(function PhaserGam
 
   useLayoutEffect(() => {
     if (gameRef.current || !containerRef.current) return;
+    const container = containerRef.current;
+
+    // React 18 StrictMode double-invokes this effect in dev (mount ->
+    // cleanup -> mount) to surface missing-cleanup bugs. Phaser.Game creates
+    // its canvas synchronously in the constructor (boot() runs immediately
+    // since the document is already loaded by the time this effect fires),
+    // but Game.destroy() is asynchronous BY DESIGN — per Phaser's own source,
+    // it just sets a `pendingDestroy` flag and waits for that instance's own
+    // render loop to notice on a later frame, and that loop doesn't even
+    // start until that instance's own asset loading finishes. That's far
+    // slower than StrictMode's synchronous double-invoke, so the first
+    // (throwaway) instance's canvas is still sitting in the DOM by the time
+    // this effect re-runs and creates a second instance — two canvases end
+    // up stacked in the same container, and only one of them ever receives
+    // live game-state updates, which is what made pawn selection feel like
+    // it only worked in a seemingly arbitrary spot. Forcibly clearing any
+    // stray canvas before creating a new game sidesteps that race instead of
+    // depending on Phaser's own (slow, async) teardown for DOM cleanliness.
+    container.querySelectorAll("canvas").forEach((c) => c.remove());
 
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
-      parent: containerRef.current,
+      parent: container,
       transparent: true,
       scale: {
         // RESIZE (rather than FIT) makes the canvas always exactly match the
@@ -34,19 +53,20 @@ export const PhaserGame = forwardRef<PhaserGameHandle, Props>(function PhaserGam
         // pitch fills any device's screen/window shape instead of always
         // rendering at one aspect ratio.
         mode: Phaser.Scale.RESIZE,
-        width: containerRef.current.clientWidth || VIEW_W,
-        height: containerRef.current.clientHeight || VIEW_H,
+        width: container.clientWidth || VIEW_W,
+        height: container.clientHeight || VIEW_H,
       },
       scene: [MatchScene],
     };
-    gameRef.current = new Phaser.Game(config);
+    const game = new Phaser.Game(config);
+    gameRef.current = game;
 
-    if (typeof ref === "function") ref({ game: gameRef.current });
-    else if (ref) ref.current = { game: gameRef.current };
+    if (typeof ref === "function") ref({ game });
+    else if (ref) ref.current = { game };
 
     return () => {
-      gameRef.current?.destroy(true);
-      gameRef.current = null;
+      game.destroy(true);
+      if (gameRef.current === game) gameRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -375,8 +375,29 @@ export class MatchScene extends Phaser.Scene {
 
     container.add([shadowOuter, shadowInner, sprite, badgeBg, badgeText]);
     container.setSize(SPRITE_WIDTH, SPRITE_HEIGHT);
+    // The hit rectangle deliberately overshoots the sprite's own bounding box:
+    // it used to end flush at y=0 (the ground point), which cut off the
+    // contact shadow and the lower few pixels of the feet — exactly where
+    // people instinctively click first — leaving only the chest/head
+    // reliably clickable. Padding it out (sides too, for a bit of forgiveness)
+    // makes the whole visible token clickable, not just its upper half.
+    const HIT_PAD_SIDE = 10;
+    const HIT_PAD_BOTTOM = 16;
+    // Phaser.GameObjects.Container hard-codes displayOriginX/Y to width/2 and
+    // height/2 (from setSize above), and the input manager adds that origin
+    // into the pointer's local coordinate before testing a custom hitArea —
+    // unlike a plain Image/Sprite, a Container's hit rectangle isn't tested
+    // in the same local space its children are drawn in. Without correcting
+    // for it, the whole hit rectangle is shifted up-left by exactly half the
+    // sprite's width/height, which is why only the top of the sprite used to
+    // be clickable. Adding displayOriginX/Y back cancels that shift out.
     container.setInteractive(
-      new Phaser.Geom.Rectangle(-SPRITE_WIDTH / 2, -SPRITE_HEIGHT, SPRITE_WIDTH, SPRITE_HEIGHT),
+      new Phaser.Geom.Rectangle(
+        -SPRITE_WIDTH / 2 - HIT_PAD_SIDE + container.displayOriginX,
+        -SPRITE_HEIGHT + container.displayOriginY,
+        SPRITE_WIDTH + HIT_PAD_SIDE * 2,
+        SPRITE_HEIGHT + HIT_PAD_BOTTOM
+      ),
       Phaser.Geom.Rectangle.Contains
     );
     container.on("pointerdown", () => this.callbacks?.onPawnClick(pawn.id));
