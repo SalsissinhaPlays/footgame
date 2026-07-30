@@ -1,32 +1,38 @@
 import { GOAL_ROW_MAX, GOAL_ROW_MIN, GRID_COLS, GRID_ROWS } from "../game/constants";
-import { isoCirclePath, pointsAttr, toIso } from "../game/iso";
+import { pointsAttr, type Projector } from "../game/iso";
 
 const SIX_YARD_DEPTH = 1.2;
 const PENALTY_DEPTH = 2.6;
 const PENALTY_PAD = 1.5; // extra rows above/below the goal mouth for the penalty box
 
-function box(x0: number, depth: number, pad: number) {
-  const x1 = x0 === 0 ? depth : GRID_COLS - depth;
-  const yTop = GOAL_ROW_MIN - pad;
-  const yBottom = GOAL_ROW_MAX + 1 + pad;
-  return [toIso(x0, yTop), toIso(x1, yTop), toIso(x1, yBottom), toIso(x0, yBottom)];
+interface Props {
+  projector: Projector;
 }
 
-function goalPosts(x0: number) {
-  const top = toIso(x0, GOAL_ROW_MIN);
-  const bottom = toIso(x0, GOAL_ROW_MAX + 1);
-  const rise = 30;
-  return (
-    <g className="goal-frame">
-      <line x1={top.x} y1={top.y} x2={top.x} y2={top.y - rise} />
-      <line x1={bottom.x} y1={bottom.y} x2={bottom.x} y2={bottom.y - rise} />
-      <line x1={top.x} y1={top.y - rise} x2={bottom.x} y2={bottom.y - rise} />
-      <line x1={top.x} y1={top.y} x2={bottom.x} y2={bottom.y} className="goal-net-back" />
-    </g>
-  );
-}
+export function Field({ projector }: Props) {
+  const { toIso, isoCirclePath } = projector;
 
-export function Field() {
+  function box(x0: number, depth: number, pad: number) {
+    const x1 = x0 === 0 ? depth : GRID_COLS - depth;
+    const yTop = GOAL_ROW_MIN - pad;
+    const yBottom = GOAL_ROW_MAX + 1 + pad;
+    return [toIso(x0, yTop), toIso(x1, yTop), toIso(x1, yBottom), toIso(x0, yBottom)];
+  }
+
+  function goalPosts(x0: number) {
+    const top = toIso(x0, GOAL_ROW_MIN);
+    const bottom = toIso(x0, GOAL_ROW_MAX + 1);
+    const rise = 30;
+    return (
+      <g className="goal-frame">
+        <line x1={top.x} y1={top.y} x2={top.x} y2={top.y - rise} />
+        <line x1={bottom.x} y1={bottom.y} x2={bottom.x} y2={bottom.y - rise} />
+        <line x1={top.x} y1={top.y - rise} x2={bottom.x} y2={bottom.y - rise} />
+        <line x1={top.x} y1={top.y} x2={bottom.x} y2={bottom.y} className="goal-net-back" />
+      </g>
+    );
+  }
+
   const outer = [toIso(0, 0), toIso(GRID_COLS, 0), toIso(GRID_COLS, GRID_ROWS), toIso(0, GRID_ROWS)];
 
   const stripes = [];

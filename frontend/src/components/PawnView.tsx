@@ -1,10 +1,11 @@
-import { toIso } from "../game/iso";
+import type { Projector } from "../game/iso";
 import type { Pawn } from "../game/types";
 
 interface Props {
   pawn: Pawn;
   selected: boolean;
   onClick: () => void;
+  projector: Projector;
 }
 
 // Sprites are pre-cropped tight to the character (feet at the bottom edge,
@@ -12,13 +13,18 @@ interface Props {
 // used when the art was integrated.
 const SPRITE_HEIGHT = 108;
 const SPRITE_WIDTH = SPRITE_HEIGHT * 0.55;
+// The art is a front-on studio render, not shot from the isometric camera
+// angle, so its "feet" don't naturally read as touching a flat iso shadow.
+// Nudging it down to overlap the shadow sells the contact better.
+const SPRITE_OVERLAP = 10;
 
 function spriteFor(pawn: Pawn): string {
   if (pawn.player.position === "GK") return "/sprites/player_gk.png";
   return pawn.side === "home" ? "/sprites/player_home.png" : "/sprites/player_away.png";
 }
 
-export function PawnView({ pawn, selected, onClick }: Props) {
+export function PawnView({ pawn, selected, onClick, projector }: Props) {
+  const { toIso } = projector;
   const base = toIso(pawn.pos.x + 0.5, pawn.pos.y + 0.5);
 
   const planned = pawn.plannedPos
@@ -26,7 +32,7 @@ export function PawnView({ pawn, selected, onClick }: Props) {
     : null;
   const kickTarget = pawn.plannedKick ? toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5) : null;
 
-  const badgeY = -SPRITE_HEIGHT - 6;
+  const badgeY = -SPRITE_HEIGHT + SPRITE_OVERLAP - 6;
 
   return (
     <g onClick={onClick} className="pawn" transform={`translate(${base.x}, ${base.y})`}>
@@ -49,13 +55,13 @@ export function PawnView({ pawn, selected, onClick }: Props) {
         </>
       )}
 
-      <ellipse cx={0} cy={0} rx={20} ry={10} className="pawn-shadow" />
-      {selected && <ellipse cx={0} cy={0} rx={26} ry={13} className="pawn-select-ring" />}
+      <ellipse cx={0} cy={2} rx={24} ry={11} className="pawn-shadow" />
+      {selected && <ellipse cx={0} cy={2} rx={30} ry={14} className="pawn-select-ring" />}
 
       <image
         href={spriteFor(pawn)}
         x={-SPRITE_WIDTH / 2}
-        y={-SPRITE_HEIGHT}
+        y={-SPRITE_HEIGHT + SPRITE_OVERLAP}
         width={SPRITE_WIDTH}
         height={SPRITE_HEIGHT}
         className="pawn-sprite"

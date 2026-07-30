@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
 import { fetchPlayers, fetchTeams } from "../game/api";
 import {
   BALL_START,
@@ -10,7 +11,7 @@ import {
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
-import { cellCorners, pointsAttr, VIEW_H, VIEW_W } from "../game/iso";
+import { createProjector, pointsAttr, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
 import type { Ball, Pawn, TeamDTO, Vec2 } from "../game/types";
 import { BallView } from "./BallView";
@@ -46,9 +47,19 @@ interface Props {
   onExitToMenu: () => void;
 }
 
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 2.5;
+
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const rotateState = useRef<{ active: boolean; startX: number; startRotation: number }>({
+    active: false,
+    startX: 0,
+    startRotation: 0,
+  });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
+  const [camera, setCamera] = useState({ zoom: 1, rotation: 0 });
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
@@ -94,6 +105,43 @@ export function Game({ mode, onExitToMenu }: Props) {
       wrapperRef.current?.requestFullscreen();
     }
   }
+
+  function handleWheel(e: ReactWheelEvent) {
+    e.preventDefault();
+    setCamera((c) => {
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, c.zoom * factor));
+      return { ...c, zoom };
+    });
+  }
+
+  function handleViewportMouseDown(e: ReactMouseEvent) {
+    // Middle button (1) or the side "back"/"forward" buttons (3/4) orbit the camera.
+    if (e.button !== 1 && e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    rotateState.current = { active: true, startX: e.clientX, startRotation: camera.rotation };
+    setIsRotating(true);
+  }
+
+  function handleViewportMouseMove(e: ReactMouseEvent) {
+    if (!rotateState.current.active) return;
+    e.preventDefault();
+    const dx = e.clientX - rotateState.current.startX;
+    const degrees = ((rotateState.current.startRotation + dx * 0.4) % 360 + 360) % 360;
+    setCamera((c) => ({ ...c, rotation: degrees }));
+  }
+
+  function stopRotating() {
+    if (!rotateState.current.active) return;
+    rotateState.current.active = false;
+    setIsRotating(false);
+  }
+
+  function resetCamera() {
+    setCamera({ zoom: 1, rotation: 0 });
+  }
+
+  const projector = useMemo(() => createProjector(camera.rotation), [camera.rotation]);
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
@@ -221,7 +269,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       cells.push(
         <polygon
           key={`cell-${x}-${y}`}
-          points={pointsAttr(cellCorners(x, y))}
+          points={pointsAttr(projector.cellCorners(x, y))}
           className={`cell ${isReachable ? "reachable" : ""} ${isReachable && kickMode ? "kicking" : ""}`}
           onClick={() => handleCellClick({ x, y })}
         />
@@ -258,7 +306,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   const controllingSideName = controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
   const visiblePawns = pawns
     .map((p) => (p.side === controllingSide ? p : { ...p, plannedPos: null, plannedKick: null }))
-    .sort((a, b) => a.pos.y - a.pos.x - (b.pos.y - b.pos.x));
+    .sort((a, b) => projector.toIso(a.pos.x, a.pos.y).y - projector.toIso(b.pos.x, b.pos.y).y);
 
   return (
     <div className="game-wrapper" ref={wrapperRef}>
@@ -331,19 +379,43 @@ export function Game({ mode, onExitToMenu }: Props) {
           <li key={i}>{e}</li>
         ))}
       </ul>
-      <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="field-svg">
-        <Field />
-        {cells}
-        <BallView ball={ball} />
-        {visiblePawns.map((pawn) => (
-          <PawnView
-            key={pawn.id}
-            pawn={pawn}
-            selected={pawn.id === selectedId}
-            onClick={() => handlePawnClick(pawn)}
-          />
-        ))}
-      </svg>
+      <p className="camera-hint">
+        Roda do mouse: zoom. Botão do meio (ou lateral) + arrastar: girar a câmera.
+      </p>
+      <div
+        className="field-viewport"
+        style={{ aspectRatio: `${VIEW_W} / ${VIEW_H}` }}
+        onWheel={handleWheel}
+        onMouseDown={handleViewportMouseDown}
+        onMouseMove={handleViewportMouseMove}
+        onMouseUp={stopRotating}
+        onMouseLeave={stopRotating}
+        onAuxClick={(e) => e.preventDefault()}
+      >
+        <svg
+          viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+          className={`field-svg ${isRotating ? "no-transitions" : ""}`}
+          style={{ transform: `scale(${camera.zoom})` }}
+        >
+          <Field projector={projector} />
+          {cells}
+          <BallView ball={ball} projector={projector} />
+          {visiblePawns.map((pawn) => (
+            <PawnView
+              key={pawn.id}
+              pawn={pawn}
+              selected={pawn.id === selectedId}
+              onClick={() => handlePawnClick(pawn)}
+              projector={projector}
+            />
+          ))}
+        </svg>
+      </div>
+      {(camera.zoom !== 1 || camera.rotation !== 0) && (
+        <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
+          Resetar câmera
+        </button>
+      )}
     </div>
   );
 }

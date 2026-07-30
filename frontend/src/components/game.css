@@ -15,7 +15,7 @@
   overflow-y: auto;
 }
 
-.game-wrapper:fullscreen .field-svg {
+.game-wrapper:fullscreen .field-viewport {
   flex: 1;
   height: 100%;
 }
@@ -170,12 +170,39 @@
   margin: 8px 0 16px;
 }
 
+.field-viewport {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  cursor: grab;
+}
+
+.field-viewport:active {
+  cursor: grabbing;
+}
+
 .field-svg {
   width: 100%;
-  height: auto;
-  border-radius: 10px;
+  height: 100%;
   background: #142616;
   display: block;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.camera-reset {
+  margin-bottom: 10px;
+}
+
+.camera-hint {
+  color: #888;
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+
+.field-svg.no-transitions .pawn,
+.field-svg.no-transitions .ball-wrapper {
+  transition: none;
 }
 
 /* --- Pitch --- */
@@ -261,7 +288,7 @@
 }
 
 .pawn-shadow {
-  fill: rgba(0, 0, 0, 0.4);
+  fill: rgba(0, 0, 0, 0.5);
 }
 
 .pawn-sprite {
