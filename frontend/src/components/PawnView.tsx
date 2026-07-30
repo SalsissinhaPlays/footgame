@@ -1,4 +1,4 @@
-import { TOKEN_RISE, toIso } from "../game/iso";
+import { CELL_SIZE } from "../game/constants";
 import type { Pawn } from "../game/types";
 
 interface Props {
@@ -8,38 +8,50 @@ interface Props {
 }
 
 export function PawnView({ pawn, selected, onClick }: Props) {
-  const base = toIso(pawn.pos.x + 0.5, pawn.pos.y + 0.5);
-
-  const planned = pawn.plannedPos
-    ? toIso(pawn.plannedPos.x + 0.5, pawn.plannedPos.y + 0.5)
-    : null;
-  const kickTarget = pawn.plannedKick ? toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5) : null;
+  const cx = pawn.pos.x * CELL_SIZE + CELL_SIZE / 2;
+  const cy = pawn.pos.y * CELL_SIZE + CELL_SIZE / 2;
 
   return (
-    <g onClick={onClick} className="pawn" transform={`translate(${base.x}, ${base.y})`}>
-      {planned && (
+    <g onClick={onClick} className="pawn" transform={`translate(${cx}, ${cy})`}>
+      {pawn.plannedPos && (
         <>
-          <line x1={0} y1={0} x2={planned.x - base.x} y2={planned.y - base.y} className="move-arrow" />
-          <ellipse
-            cx={planned.x - base.x}
-            cy={planned.y - base.y}
-            rx={16}
-            ry={8}
+          <line
+            x1={0}
+            y1={0}
+            x2={(pawn.plannedPos.x - pawn.pos.x) * CELL_SIZE}
+            y2={(pawn.plannedPos.y - pawn.pos.y) * CELL_SIZE}
+            className="move-arrow"
+          />
+          <circle
+            cx={(pawn.plannedPos.x - pawn.pos.x) * CELL_SIZE}
+            cy={(pawn.plannedPos.y - pawn.pos.y) * CELL_SIZE}
+            r={CELL_SIZE * 0.25}
             className={`pawn-ghost ${pawn.side}`}
           />
         </>
       )}
-      {kickTarget && (
+      {pawn.plannedKick && (
         <>
-          <line x1={0} y1={0} x2={kickTarget.x - base.x} y2={kickTarget.y - base.y} className="kick-arrow" />
-          <circle cx={kickTarget.x - base.x} cy={kickTarget.y - base.y} r={7} className="kick-target" />
+          <line
+            x1={0}
+            y1={0}
+            x2={(pawn.plannedKick.x - pawn.pos.x) * CELL_SIZE}
+            y2={(pawn.plannedKick.y - pawn.pos.y) * CELL_SIZE}
+            className="kick-arrow"
+          />
+          <circle
+            cx={(pawn.plannedKick.x - pawn.pos.x) * CELL_SIZE}
+            cy={(pawn.plannedKick.y - pawn.pos.y) * CELL_SIZE}
+            r={CELL_SIZE * 0.15}
+            className="kick-target"
+          />
         </>
       )}
-
-      <ellipse cx={0} cy={0} rx={20} ry={10} className="pawn-shadow" />
-      <line x1={0} y1={0} x2={0} y2={-TOKEN_RISE} className="pawn-neck" />
-      <circle cy={-TOKEN_RISE} r={18} className={`pawn-body ${pawn.side} ${selected ? "selected" : ""}`} />
-      <text y={-TOKEN_RISE} textAnchor="middle" dominantBaseline="central" className="pawn-number">
+      <circle
+        r={CELL_SIZE * 0.38}
+        className={`pawn-circle ${pawn.side} ${selected ? "selected" : ""}`}
+      />
+      <text textAnchor="middle" dominantBaseline="central" className="pawn-number">
         {pawn.player.jersey_number}
       </text>
     </g>

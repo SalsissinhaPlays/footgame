@@ -1,23 +1,8 @@
 .game-wrapper {
-  max-width: 1100px;
+  max-width: 900px;
   margin: 0 auto;
   padding: 16px;
   font-family: system-ui, sans-serif;
-}
-
-.game-wrapper:fullscreen {
-  max-width: 100%;
-  width: 100vw;
-  height: 100vh;
-  background: #14181f;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.game-wrapper:fullscreen .field-svg {
-  flex: 1;
-  height: 100%;
 }
 
 .game-header {
@@ -173,40 +158,23 @@
 .field-svg {
   width: 100%;
   height: auto;
-  border-radius: 10px;
-  background: #1c3d1f;
-  display: block;
+  border-radius: 8px;
+  background: #3f9142;
 }
 
-/* --- Pitch (isometric) --- */
-
-.pitch-base {
-  fill: #3a8f3f;
+.pitch-bg {
+  fill: #3f9142;
 }
 
-.pitch-stripe {
-  stroke: none;
-}
-
-.pitch-stripe.light {
-  fill: #45a04a;
-}
-
-.pitch-stripe.dark {
-  fill: #3a8f3f;
+.grid-line {
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-width: 1;
 }
 
 .pitch-border {
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 2;
   fill: none;
-  stroke: rgba(255, 255, 255, 0.85);
-  stroke-width: 2.5;
-  stroke-linejoin: round;
-}
-
-.pitch-line {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.85);
-  stroke-width: 2.5;
 }
 
 .goal-area {
@@ -215,20 +183,8 @@
   stroke-width: 2;
 }
 
-.goal-frame line {
-  stroke: #eee;
-  stroke-width: 3;
-  stroke-linecap: round;
-}
-
-/* --- Ball --- */
-
 .ball-wrapper {
   transition: transform 0.35s linear;
-}
-
-.ball-shadow {
-  fill: rgba(0, 0, 0, 0.35);
 }
 
 .ball {
@@ -238,11 +194,8 @@
   pointer-events: none;
 }
 
-/* --- Cells --- */
-
 .cell {
   fill: transparent;
-  stroke: rgba(255, 255, 255, 0.06);
   cursor: default;
 }
 
@@ -255,36 +208,25 @@
   fill: rgba(239, 108, 0, 0.28);
 }
 
-/* --- Pawns (2.5D tokens) --- */
-
 .pawn {
   cursor: pointer;
   transition: transform 0.35s linear;
 }
 
-.pawn-shadow {
-  fill: rgba(0, 0, 0, 0.35);
-}
-
-.pawn-neck {
-  stroke: rgba(0, 0, 0, 0.25);
-  stroke-width: 6;
-}
-
-.pawn-body {
-  stroke: rgba(0, 0, 0, 0.5);
+.pawn-circle {
+  stroke: rgba(0, 0, 0, 0.4);
   stroke-width: 1.5;
 }
 
-.pawn-body.home {
-  fill: url(#pawn-body-home);
+.pawn-circle.home {
+  fill: #1565c0;
 }
 
-.pawn-body.away {
-  fill: url(#pawn-body-away);
+.pawn-circle.away {
+  fill: #c62828;
 }
 
-.pawn-body.selected {
+.pawn-circle.selected {
   stroke: #ffeb3b;
   stroke-width: 3;
 }
