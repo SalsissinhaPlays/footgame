@@ -43,15 +43,28 @@ npm run build       # compiles to dist/
 - `backend/src/db.ts` opens/creates `data/game.db`, defines the `teams` and `players` tables, and seeds two demo teams ("Eagle FC", "Rival United") with a 6-player squad each (GK/DEF/DEF/MID/MID/FWD) if the DB is empty.
 - `backend/src/index.ts` is a thin Express layer: `GET /api/teams`, `GET /api/teams/:id/players`, `GET /api/health`. No auth, no write endpoints yet.
 
-### Frontend: the match engine is decoupled from React
+### Frontend: the match engine is decoupled from rendering
 
-All match-simulation logic lives in `frontend/src/game/*.ts` as plain, framework-free functions/types. `frontend/src/components/Game.tsx` is the only component with state; everything else (`Field`, `PawnView`, `BallView`, `MainMenu`) is presentational.
+All match-simulation logic lives in `frontend/src/game/*.ts` as plain, framework-free functions/types with **no dependency on React or Phaser**. `frontend/src/components/Game.tsx` owns all state (pawns, ball, score, turn, camera, selection) and orchestrates it; rendering is delegated to a Phaser 3 scene (see below), not JSX.
 
-- **`constants.ts`** — every tunable game parameter (grid size, `MOVE_RANGE`, `KICK_RANGE`, `BALL_SPEED`, `TOTAL_TURNS`, goal-mouth rows). Tune gameplay feel here, not by scattering magic numbers.
+- **`constants.ts`** — every tunable game parameter (grid size, `MOVE_RANGE`, `KICK_RANGE`, `BALL_SPEED`, `TOTAL_TURNS`, goal-mouth rows, `OOB_CELLS`). Tune gameplay feel here, not by scattering magic numbers.
 - **`formation.ts`** — `buildFormation(players, side)` places a squad's `PlayerDTO[]` into fixed grid slots (mirrored horizontally for the away side).
 - **`resolve.ts`** — the core simulation, `resolveTurn(pawns, ball): { snapshots, events, goal }`. This is the most important file to understand before making mechanical changes. Pure function, no side effects, fully unit-testable via the tsx-script pattern above.
+- **`ai.ts`** — rule-based opponent (see below).
+- **`iso.ts`** — pure isometric projection math (`createProjector(rotationDeg, tiltDeg)`), used only by the Phaser scene for positioning. Grid size is `GRID_COLS x GRID_ROWS` (16x12); an extra `OOB_CELLS`-wide out-of-bounds apron is walkable on all four sides, and the goal net pocket (`GOAL_NET_DEPTH` beyond the goal line) is where scoring actually happens — see below.
 - **`api.ts`** — thin `fetch` wrappers for the two backend endpoints.
 - **`types.ts`** — `Pawn` (with `plannedPos` **or** `plannedKick`, mutually exclusive), `Ball`, `Side`.
+
+### Rendering: Phaser 3, bridged to React
+
+The pitch/pawns/ball are drawn by a **Phaser 3** (`phaser@3.90.0`, pinned — not the newer Phaser 4 that npm resolves to by default) scene, not SVG/JSX. This was a deliberate migration; `frontend/src/components/Field.tsx`/`PawnView.tsx`/`BallView.tsx` (the original SVG renderers) were deleted.
+
+- **`frontend/src/phaser/PhaserGame.tsx`** — React wrapper that creates/destroys the `Phaser.Game` instance in a `<div>` on mount/unmount and forwards the ready scene via a callback prop.
+- **`frontend/src/phaser/MatchScene.ts`** — the actual renderer. `preload()` loads the sprite PNGs from `frontend/public/sprites/`; `create()` builds static field Graphics and the interactive cell grid (each cell is a `Phaser.GameObjects.Zone` with a custom `Phaser.Geom.Polygon` hit area, since cells are diamond-shaped under the iso projection, not rectangles). `syncState(state)` is the single entry point React calls after every render — it re-projects and moves/tweens pawn and ball sprites, redraws the field when camera rotation/tilt changed, and updates cell highlight colors. Pawn/ball position changes are animated via `this.tweens.add(...)` (350ms linear) rather than CSS transitions.
+- **`frontend/src/phaser/EventBus.ts`** — a `Phaser.Events.EventEmitter` singleton (same pattern as the official `phaserjs/template-react`), used only for the scene to announce `"current-scene-ready"`.
+- **Data flow is one-directional and imperative, not prop-driven**: `Game.tsx` keeps a `sceneRef` (set once via the ready callback) and calls `sceneRef.current?.syncState(...)` in a dependency-free `useEffect` that reruns after every render. Because setting a ref doesn't trigger a re-render, there's also a `sceneReady` **state** flag flipped in the ready callback — without it, the first `syncState` call (the one that actually populates pawn sprites) never fires, since the effect that would call it already ran (with a null ref) before the scene finished loading. Click input flows the other way: pawn/cell `pointerdown` handlers call `this.callbacks.onPawnClick/onCellClick`, which `Game.tsx` wires to always-fresh closures via a `handlersRef` (avoids stale `pawns`/`selectedId` in the one-time `setCallbacks` call).
+- **Camera rotation/tilt is not a Phaser camera feature** — Phaser's `camera.rotation` just spins the 2D view, which isn't what an orbiting isometric camera needs. Rotation/tilt are handled entirely by `iso.ts`'s projection math (recomputed and re-applied to every sprite in `syncState`); only **zoom** uses Phaser's real `camera.setZoom`. Mouse drag-to-orbit (middle/side button, horizontal = rotate, vertical = tilt) and wheel-to-zoom are handled in `Game.tsx` on the wrapping `<div>`, not inside the Phaser scene, so the existing proven mouse-event code didn't need to move.
+- Sprite art in `frontend/public/sprites/` (`player_home.png`, `player_away.png`, `player_gk.png`, `ball.png`, `grass_light.png`, `grass_dark.png`) is AI-generated, cropped tight to content via a one-off PowerShell/System.Drawing script (not checked in) — if regenerating art, crop to remove transparent/near-transparent margins before dropping files in, or characters will render with a visible gap above their ground shadow.
 
 ### How a turn resolves (`resolveTurn`)
 
@@ -63,7 +76,7 @@ All match-simulation logic lives in `frontend/src/game/*.ts` as plain, framework
    - **Rule 3 (group contest)**: two-plus pawns converging on the same free cell — skill-check; losers stopped for the rest of the turn.
    - Skill check (`skillCheckRoll`): `skill*0.7 + pace*0.3 + random(-15, 15)`, highest wins. This is a placeholder formula, expected to be retuned.
 4. **Invariant**: no two pawns may ever occupy the same cell in any snapshot. This has been fuzz-tested (random start/destination pairs, hundreds of trials) — preserve this invariant if you touch the collision rules.
-5. If the ball ends the turn inside a goal mouth (`goalScoredAt`, columns 0 or `GRID_COLS-1` within `GOAL_ROW_MIN..GOAL_ROW_MAX`), `goal` is set; `Game.tsx` increments score, resets both sides to kickoff formation, and re-centers the ball (`BALL_START`).
+5. If the ball ends the turn past the goal line (`goalScoredAt`: `x < 0` or `x >= GRID_COLS`, within `GOAL_ROW_MIN..GOAL_ROW_MAX`) — i.e. actually inside the net, not just standing on the pitch-edge cell — `goal` is set; `Game.tsx` increments score, resets both sides to kickoff formation, and re-centers the ball (`BALL_START`). Reaching the net works whether the ball got there by a kick or by a pawn dribbling it there, since pawns are allowed to walk into the out-of-bounds apron/net (`OOB_CELLS`).
 
 ### Hotseat multiplayer and hidden information
 
@@ -77,7 +90,7 @@ In `Game.tsx`, `mode: "ai"` skips the `readySides`/`handoff` dance entirely: cli
 
 ### Pre-game menu
 
-`MainMenu.tsx` offers "Multiplayer local" (hotseat, see above) and "Jogar contra a IA" (human always plays `home`, AI always plays `away`). `App.tsx` is a tiny two-screen state machine (`menu` / `match`) with no router.
+`MainMenu.tsx` offers three modes: "Multiplayer local" (hotseat, see above), "Jogar contra a IA" (human always plays `home`, AI always plays `away`), and "Modo solo" (practice — away side never gets a plan, stays put; useful for testing mechanics without an opponent). `App.tsx` is a tiny two-screen state machine (`menu` / `match`) with no router.
 
 ### Windows dev environment note
 
