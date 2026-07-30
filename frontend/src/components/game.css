@@ -137,6 +137,16 @@
   font-size: 13px;
   color: #5d4a00;
   text-align: left;
+  min-height: 52px;
+  box-sizing: border-box;
+  list-style: none;
+}
+
+/* Reserves the same space when there's nothing to show yet, so the field
+   below never jumps when events appear/disappear between turns. */
+.events-log.empty {
+  background: transparent;
+  border-color: transparent;
 }
 
 .hint {
@@ -173,6 +183,10 @@
   stroke-width: 2;
 }
 
+.ball-wrapper {
+  transition: transform 0.35s linear;
+}
+
 .ball {
   fill: #fff8e1;
   stroke: #33291a;
@@ -196,6 +210,7 @@
 
 .pawn {
   cursor: pointer;
+  transition: transform 0.35s linear;
 }
 
 .pawn-circle {

@@ -22,6 +22,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function nothingMoved(pawns: Pawn[], ballPos: Vec2, prevPawns: Pawn[], prevBallPos: Vec2): boolean {
+  if (ballPos.x !== prevBallPos.x || ballPos.y !== prevBallPos.y) return false;
+  return pawns.every((p, i) => p.pos.x === prevPawns[i].pos.x && p.pos.y === prevPawns[i].pos.y);
+}
+
 function chebyshevDistance(a: Vec2, b: Vec2): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 }
@@ -131,10 +136,15 @@ export function Game({ mode, onExitToMenu }: Props) {
     setEvents([]);
 
     const { snapshots, events: turnEvents, goal } = resolveTurn(inputPawns, ball);
+    let prevPawns = inputPawns;
+    let prevBallPos = ball.pos;
     for (const snapshot of snapshots) {
+      const stillMoving = !nothingMoved(snapshot.pawns, snapshot.ball, prevPawns, prevBallPos);
       setPawns(snapshot.pawns);
       setBall({ pos: snapshot.ball });
-      await sleep(350);
+      await sleep(stillMoving ? 350 : 80);
+      prevPawns = snapshot.pawns;
+      prevBallPos = snapshot.ball;
     }
 
     setEvents(turnEvents);
@@ -298,13 +308,11 @@ export function Game({ mode, onExitToMenu }: Props) {
           </button>
         </div>
       )}
-      {events.length > 0 && (
-        <ul className="events-log">
-          {events.map((e, i) => (
-            <li key={i}>{e}</li>
-          ))}
-        </ul>
-      )}
+      <ul className={`events-log ${events.length > 0 ? "" : "empty"}`}>
+        {events.map((e, i) => (
+          <li key={i}>{e}</li>
+        ))}
+      </ul>
       <svg
         viewBox={`0 0 ${GRID_COLS * CELL_SIZE} ${GRID_ROWS * CELL_SIZE}`}
         className="field-svg"
