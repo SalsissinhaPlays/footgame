@@ -31,17 +31,56 @@ export function Field({ projector }: Props) {
     ];
   }
 
-  function goalPosts(atHome: boolean) {
+  /** A proper 3D goal box: frame (posts + crossbar) at the goal line, net mesh on the back/sides/roof. */
+  function goalStructure(atHome: boolean) {
+    const lineX = atHome ? 0 : GRID_COLS;
     const netX = atHome ? -GOAL_NET_DEPTH : GRID_COLS + GOAL_NET_DEPTH;
-    const top = toIso(netX, GOAL_ROW_MIN);
-    const bottom = toIso(netX, GOAL_ROW_MAX + 1);
-    const rise = 30;
+    const rise = 34;
+
+    const frontTop = toIso(lineX, GOAL_ROW_MIN);
+    const frontBottom = toIso(lineX, GOAL_ROW_MAX + 1);
+    const backTop = toIso(netX, GOAL_ROW_MIN);
+    const backBottom = toIso(netX, GOAL_ROW_MAX + 1);
+
+    const frontTopRise = { x: frontTop.x, y: frontTop.y - rise };
+    const frontBottomRise = { x: frontBottom.x, y: frontBottom.y - rise };
+    const backTopRise = { x: backTop.x, y: backTop.y - rise };
+    const backBottomRise = { x: backBottom.x, y: backBottom.y - rise };
+
     return (
-      <g className="goal-frame">
-        <line x1={top.x} y1={top.y} x2={top.x} y2={top.y - rise} />
-        <line x1={bottom.x} y1={bottom.y} x2={bottom.x} y2={bottom.y - rise} />
-        <line x1={top.x} y1={top.y - rise} x2={bottom.x} y2={bottom.y - rise} />
-        <line x1={top.x} y1={top.y} x2={bottom.x} y2={bottom.y} className="goal-net-back" />
+      <g className="goal-structure">
+        <polygon
+          points={pointsAttr([backTop, backBottom, backBottomRise, backTopRise])}
+          className="goal-net-panel"
+        />
+        <polygon
+          points={pointsAttr([frontTop, backTop, backTopRise, frontTopRise])}
+          className="goal-net-panel"
+        />
+        <polygon
+          points={pointsAttr([frontBottom, backBottom, backBottomRise, frontBottomRise])}
+          className="goal-net-panel"
+        />
+        <polygon
+          points={pointsAttr([frontTopRise, frontBottomRise, backBottomRise, backTopRise])}
+          className="goal-net-panel"
+        />
+
+        <line x1={frontTop.x} y1={frontTop.y} x2={frontTopRise.x} y2={frontTopRise.y} className="goal-post" />
+        <line
+          x1={frontBottom.x}
+          y1={frontBottom.y}
+          x2={frontBottomRise.x}
+          y2={frontBottomRise.y}
+          className="goal-post"
+        />
+        <line
+          x1={frontTopRise.x}
+          y1={frontTopRise.y}
+          x2={frontBottomRise.x}
+          y2={frontBottomRise.y}
+          className="goal-crossbar"
+        />
       </g>
     );
   }
@@ -85,6 +124,11 @@ export function Field({ projector }: Props) {
         <pattern id="grass-dark-tex" patternUnits="userSpaceOnUse" width="480" height="480">
           <image href="/sprites/grass_dark.png" width="480" height="480" className="grass-image" />
         </pattern>
+        <pattern id="net-mesh" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="9" height="9" className="net-mesh-bg" />
+          <line x1="0" y1="0" x2="0" y2="9" className="net-mesh-line" />
+          <line x1="0" y1="0" x2="9" y2="0" className="net-mesh-line" />
+        </pattern>
       </defs>
 
       <polygon points={pointsAttr(apron)} className="pitch-apron" />
@@ -114,8 +158,8 @@ export function Field({ projector }: Props) {
         </g>
       ))}
 
-      {goalPosts(true)}
-      {goalPosts(false)}
+      {goalStructure(true)}
+      {goalStructure(false)}
     </g>
   );
 }

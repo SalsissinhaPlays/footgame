@@ -245,19 +245,32 @@
 }
 
 .goal-net {
-  fill: rgba(15, 15, 15, 0.55);
+  fill: rgba(15, 15, 15, 0.4);
 }
 
-.goal-frame line {
-  stroke: #eee;
-  stroke-width: 3;
+.net-mesh-bg {
+  fill: rgba(8, 10, 8, 0.45);
+}
+
+.net-mesh-line {
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1;
+}
+
+.goal-net-panel {
+  fill: url(#net-mesh);
+  stroke: none;
+}
+
+.goal-post,
+.goal-crossbar {
+  stroke: #f7f7f7;
+  stroke-width: 5;
   stroke-linecap: round;
 }
 
-.goal-net-back {
-  stroke: rgba(255, 255, 255, 0.35) !important;
-  stroke-width: 1.5 !important;
-  stroke-dasharray: 2 3;
+.goal-crossbar {
+  stroke-width: 4.5;
 }
 
 /* --- Ball --- */
