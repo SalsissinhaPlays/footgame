@@ -69,7 +69,15 @@ All match-simulation logic lives in `frontend/src/game/*.ts` as plain, framework
 
 `Game.tsx` holds `controllingSide`, `readySides`, and `handoff`. Each side plans only its own pawns (`handlePawnClick` gates by `controllingSide`), then clicks "Pronto" (`handleReady`). If the other side isn't ready yet, a full-screen handoff prompt ("Passe o computador") hides the board until the next player clicks through; when both sides are ready, `resolveTurn` runs automatically. `visiblePawns` (derived in render) strips `plannedPos`/`plannedKick` from the non-controlling side so a player can't see the opponent's queued moves. There is no server-side authority or actual separation between the two "players" — this is local/same-screen only, by design (the user described it as "para testes mesmo").
 
-The pre-game menu (`MainMenu.tsx`) currently offers "Multiplayer local" (implemented) and "Jogar contra IA" (disabled placeholder — AI is not yet implemented).
+### AI opponent (`game/ai.ts`)
+
+`planAiTurn(pawns, ball, aiSide)` is a simple rule-based decision function, not search/minimax — it returns a full `Pawn[]` with `plannedPos`/`plannedKick` filled in for `aiSide` only, ready to feed straight into `resolveTurn`. Rules, checked in order, for the AI's ball carrier: shoot if the opponent's goal is within `KICK_RANGE` and the straight line to it is clear (`hasClearLane`); else pass to the most advanced teammate with a clear lane; else dribble upfield (`moveToward` the goal, clamped to `MOVE_RANGE`). Off the ball: the nearest non-GK teammate presses the ball if the AI doesn't have it, everyone else holds/drifts toward their own half; the `GK` always just shadows the ball's row in front of its own goal. `moveToward` picks a final destination for the turn (like a human clicking a cell) — it does not know about `resolveTurn`'s per-tick sidestep logic, so the AI can still get fully blocked by a defender sitting directly on a same-row/same-column line to its target (no lateral give to route around, same limitation as human-planned moves in that geometry).
+
+In `Game.tsx`, `mode: "ai"` skips the `readySides`/`handoff` dance entirely: clicking "Prosseguir" computes the AI's moves for `"away"` synchronously and resolves immediately, so the AI's plan is never held in React state before resolution (nothing to accidentally reveal).
+
+### Pre-game menu
+
+`MainMenu.tsx` offers "Multiplayer local" (hotseat, see above) and "Jogar contra a IA" (human always plays `home`, AI always plays `away`). `App.tsx` is a tiny two-screen state machine (`menu` / `match`) with no router.
 
 ### Windows dev environment note
 
