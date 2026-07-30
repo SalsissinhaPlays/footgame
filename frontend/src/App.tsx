@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Game } from "./components/Game";
 import { MainMenu } from "./components/MainMenu";
 
-type Screen = { name: "menu" } | { name: "match"; mode: "hotseat" | "ai" };
+type Screen = { name: "menu" } | { name: "match"; mode: "hotseat" | "ai" | "solo" };
 
 function App() {
   const [screen, setScreen] = useState<Screen>({ name: "menu" });
@@ -12,6 +12,7 @@ function App() {
       <MainMenu
         onStartHotseat={() => setScreen({ name: "match", mode: "hotseat" })}
         onStartAi={() => setScreen({ name: "match", mode: "ai" })}
+        onStartSolo={() => setScreen({ name: "match", mode: "solo" })}
       />
     );
   }

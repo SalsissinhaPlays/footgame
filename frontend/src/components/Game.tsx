@@ -37,7 +37,7 @@ function kickoffFormation(pawns: Pawn[]): Pawn[] {
 }
 
 interface Props {
-  mode: "hotseat" | "ai";
+  mode: "hotseat" | "ai" | "solo";
   onExitToMenu: () => void;
 }
 
@@ -164,6 +164,12 @@ export function Game({ mode, onExitToMenu }: Props) {
       return;
     }
 
+    if (mode === "solo") {
+      // No opponent to plan for — the away side just never gets a plannedPos/plannedKick.
+      await resolveWithPawns(pawns);
+      return;
+    }
+
     const next = new Set(readySides);
     next.add(controllingSide);
     setReadySides(next);
@@ -245,7 +251,7 @@ export function Game({ mode, onExitToMenu }: Props) {
             Turno {Math.min(turn, TOTAL_TURNS)} / {TOTAL_TURNS}
           </span>
           <button type="button" onClick={handleReady} disabled={resolving || matchOver}>
-            {resolving ? "Resolvendo..." : mode === "ai" ? "Prosseguir" : "Pronto"}
+            {resolving ? "Resolvendo..." : mode === "hotseat" ? "Pronto" : "Prosseguir"}
           </button>
         </div>
       </div>
@@ -259,6 +265,12 @@ export function Game({ mode, onExitToMenu }: Props) {
           Clique em um peão azul e depois em uma casa destacada para planejar o movimento. Quem
           estiver em cima da bola a carrega ao se mover. Clique em "Prosseguir" para ver o que o
           adversário (controlado pelo computador) faz.
+        </p>
+      ) : mode === "solo" ? (
+        <p className="hint">
+          Clique em um peão azul e depois em uma casa destacada para planejar o movimento. Quem
+          estiver em cima da bola a carrega ao se mover. O time adversário fica parado neste modo
+          — é só para testar a mecânica. Clique em "Prosseguir" para executar.
         </p>
       ) : (
         <p className="hint">
