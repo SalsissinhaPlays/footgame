@@ -27,7 +27,7 @@ export interface MatchSyncState {
   reachRadius: number | null;
   kickMode: boolean;
   controllingSide: Side;
-  camera: { zoom: number; rotation: number; tilt: number };
+  camera: { zoom: number; rotation: number; tilt: number; panX: number; panY: number };
 }
 
 export interface MatchCallbacks {
@@ -153,8 +153,37 @@ export class MatchScene extends Phaser.Scene {
   /** Keeps the fixed-size isometric world fitted and centered as the real canvas size changes. */
   private handleResize(gameSize: { width: number; height: number }) {
     this.fitZoom = Math.min(gameSize.width / VIEW_W, gameSize.height / VIEW_H);
-    this.cameras.main.setZoom(this.fitZoom * (this.state?.camera.zoom ?? 1));
-    this.cameras.main.centerOn(VIEW_W / 2, VIEW_H / 2);
+    if (this.state) {
+      this.applyCamera(this.state);
+    } else {
+      this.cameras.main.setZoom(this.fitZoom);
+      this.cameras.main.centerOn(VIEW_W / 2, VIEW_H / 2);
+    }
+  }
+
+  /**
+   * Applies zoom and a pan-adjusted center in one place, since the valid pan
+   * range depends on the current zoom: at the default fit-to-screen zoom
+   * there's nowhere useful to pan (the whole world's already visible), while
+   * zooming in frees up real room to push the view toward any part of the
+   * pitch. Clamped so the camera can never wander far enough to lose the
+   * world's bounding box entirely off-screen.
+   */
+  private applyCamera(state: MatchSyncState) {
+    const zoom = this.fitZoom * state.camera.zoom;
+    this.cameras.main.setZoom(zoom);
+
+    const gameSize = this.scale.gameSize;
+    const visibleHalfW = gameSize.width / 2 / zoom;
+    const visibleHalfH = gameSize.height / 2 / zoom;
+    const minCenterX = visibleHalfW * 0.5;
+    const maxCenterX = Math.max(minCenterX, VIEW_W - visibleHalfW * 0.5);
+    const minCenterY = visibleHalfH * 0.5;
+    const maxCenterY = Math.max(minCenterY, VIEW_H - visibleHalfH * 0.5);
+
+    const centerX = Math.min(maxCenterX, Math.max(minCenterX, VIEW_W / 2 + state.camera.panX));
+    const centerY = Math.min(maxCenterY, Math.max(minCenterY, VIEW_H / 2 + state.camera.panY));
+    this.cameras.main.centerOn(centerX, centerY);
   }
 
   /** Called by React whenever pawns/ball/selection/camera change. Safe to call every render. */
@@ -170,7 +199,7 @@ export class MatchScene extends Phaser.Scene {
       this.redrawField();
     }
 
-    this.cameras.main.setZoom(this.fitZoom * state.camera.zoom);
+    this.applyCamera(state);
     this.updateReachHighlight();
     this.updatePawns();
     this.updateBall();

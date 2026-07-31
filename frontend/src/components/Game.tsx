@@ -69,8 +69,17 @@ interface Props {
   onExitToMenu: () => void;
 }
 
+// Scaled up along with the field-expansion pitch rescale — these were tuned
+// for a 16x12 world where 2.5x already zoomed in close; on the ~4x-bigger
+// pitch, reaching an equivalently close-up view needs an equivalently
+// bigger zoom ceiling. Panning (below) is what makes a higher ceiling
+// actually useful, rather than just zooming in on a fixed, centered view.
 const ZOOM_MIN = 0.6;
-const ZOOM_MAX = 2.5;
+const ZOOM_MAX = 10;
+// View-space units per second panned at zoom=1 (VIEW_W/H are ~6100x6400 at
+// the current pitch scale) — divided by the user's zoom below so panning
+// feels like a consistent speed on screen regardless of how zoomed in.
+const PAN_SPEED = 2600;
 
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -91,7 +100,8 @@ export function Game({ mode, onExitToMenu }: Props) {
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
-  const [camera, setCamera] = useState({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT });
+  const [camera, setCamera] = useState({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT, panX: 0, panY: 0 });
+  const pressedKeys = useRef<Set<string>>(new Set());
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
@@ -128,6 +138,53 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  // WASD pans the camera (screen-relative: W/S move the view up/down, A/D
+  // left/right — these operate directly in the same projected view-space
+  // MatchScene's centerOn already uses, so no rotation compensation is
+  // needed). Runs as an animation-frame loop rather than per-keydown steps
+  // so holding a key pans smoothly and proportionally to real elapsed time.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const key = e.key.toLowerCase();
+      if (key === "w" || key === "a" || key === "s" || key === "d") {
+        pressedKeys.current.add(key);
+      }
+    }
+    function handleKeyUp(e: KeyboardEvent) {
+      pressedKeys.current.delete(e.key.toLowerCase());
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+
+    let raf = 0;
+    let lastTime = performance.now();
+    function tick(now: number) {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      const keys = pressedKeys.current;
+      if (keys.size > 0) {
+        setCamera((c) => {
+          const speed = (PAN_SPEED / c.zoom) * dt;
+          let panX = c.panX;
+          let panY = c.panY;
+          if (keys.has("a")) panX -= speed;
+          if (keys.has("d")) panX += speed;
+          if (keys.has("w")) panY -= speed;
+          if (keys.has("s")) panY += speed;
+          return { ...c, panX, panY };
+        });
+      }
+      raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      cancelAnimationFrame(raf);
+    };
   }, []);
 
   function toggleFullscreen() {
@@ -175,7 +232,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function resetCamera() {
-    setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT });
+    setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT, panX: 0, panY: 0 });
   }
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
@@ -427,7 +484,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       </ul>
       <p className="camera-hint">
         Mouse wheel: zoom. Middle (or side) button + drag horizontally: rotate the camera.
-        Drag vertically: adjust the tilt.
+        Drag vertically: adjust the tilt. WASD: pan around the pitch.
       </p>
       <div
         className="field-viewport"
@@ -442,7 +499,11 @@ export function Game({ mode, onExitToMenu }: Props) {
         {!sceneReady && <p className="hint">Loading the pitch...</p>}
         <PhaserGame onSceneReady={handleSceneReady} />
       </div>
-      {(camera.zoom !== 1 || camera.rotation !== 0 || camera.tilt !== TILT_DEFAULT) && (
+      {(camera.zoom !== 1 ||
+        camera.rotation !== 0 ||
+        camera.tilt !== TILT_DEFAULT ||
+        camera.panX !== 0 ||
+        camera.panY !== 0) && (
         <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
           Reset camera
         </button>
