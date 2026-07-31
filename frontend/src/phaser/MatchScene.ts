@@ -1,11 +1,14 @@
 import Phaser from "phaser";
 import { landingSpread } from "../game/aim";
 import {
+  CAPTURE_RADIUS,
   CHECKER_CELL_SIZE,
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
   GRID_ROWS,
+  PAWN_COLLISION_RADIUS,
+  TACKLE_RADIUS,
 } from "../game/constants";
 import {
   createProjector,
@@ -69,6 +72,7 @@ export class MatchScene extends Phaser.Scene {
   private linesGfx!: Phaser.GameObjects.Graphics;
   private cellsGfx!: Phaser.GameObjects.Graphics;
   private fieldZone!: Phaser.GameObjects.Zone;
+  private radiusGfx!: Phaser.GameObjects.Graphics;
   private overlayGfx!: Phaser.GameObjects.Graphics;
   private ballShadow!: Phaser.GameObjects.Ellipse;
   private ballSprite!: Phaser.GameObjects.Image;
@@ -104,6 +108,7 @@ export class MatchScene extends Phaser.Scene {
     this.fieldGfx = this.add.graphics();
     this.linesGfx = this.add.graphics();
     this.cellsGfx = this.add.graphics();
+    this.radiusGfx = this.add.graphics();
     this.overlayGfx = this.add.graphics();
 
     this.ballShadow = this.add.ellipse(0, 0, 18, 9, 0x000000, 0.4);
@@ -203,6 +208,7 @@ export class MatchScene extends Phaser.Scene {
     this.updateReachHighlight();
     this.updatePawns();
     this.updateBall();
+    this.updateInfluenceOverlay();
     this.updateOverlay();
   }
 
@@ -412,6 +418,42 @@ export class MatchScene extends Phaser.Scene {
       g.lineStyle(1.5, 0x76d275, 0.9);
       strokePoly(g, haloPts, true);
     }
+  }
+
+  // --- Influence-radius debug overlay ---
+
+  /**
+   * Tuning aid: draws each pawn's PAWN_COLLISION_RADIUS (the personal space
+   * that forces a detour around it), CAPTURE_RADIUS around the ball (how
+   * close a pass/interception has to get), and TACKLE_RADIUS around whoever
+   * currently carries it. These radii are otherwise invisible, which made
+   * outcomes ("why did that count as a tackle, they looked far apart")
+   * hard to predict by eye — this makes them visible so they can be tuned
+   * by watching actual play instead of just reading the numbers.
+   */
+  private updateInfluenceOverlay() {
+    const g = this.radiusGfx;
+    g.clear();
+    if (!this.state) return;
+    const p = this.projector;
+    const { pawns, ball } = this.state;
+
+    for (const pawn of pawns) {
+      const pts = isoCircle(p, pawn.pos.x + 0.5, pawn.pos.y + 0.5, PAWN_COLLISION_RADIUS, 20);
+      g.lineStyle(1, 0xffffff, 0.25);
+      strokePoly(g, pts, true);
+    }
+
+    const carrier = pawns.find((pw) => pw.pos.x === ball.pos.x && pw.pos.y === ball.pos.y);
+    if (carrier) {
+      const tacklePts = isoCircle(p, carrier.pos.x + 0.5, carrier.pos.y + 0.5, TACKLE_RADIUS, 24);
+      g.lineStyle(1.5, 0xff5252, 0.5);
+      strokePoly(g, tacklePts, true);
+    }
+
+    const capturePts = isoCircle(p, ball.pos.x + 0.5, ball.pos.y + 0.5, CAPTURE_RADIUS, 24);
+    g.lineStyle(1.5, 0x40c4ff, 0.6);
+    strokePoly(g, capturePts, true);
   }
 
   // --- Pawns ---

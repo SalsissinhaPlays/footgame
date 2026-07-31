@@ -11,7 +11,7 @@ import type { Pawn, Side, Vec2 } from "./types";
  */
 export type KickIntent = "shot" | "pass" | "clear";
 
-const PASS_TARGET_RADIUS = 6;
+const PASS_TARGET_RADIUS = 2.5;
 const GOAL_LINE_MARGIN = 6;
 
 function distance(a: Vec2, b: Vec2): number {
@@ -34,8 +34,8 @@ export function classifyKickTarget(target: Vec2, side: Side, kickerId: string, p
 
 /** A plain-language risk qualifier for a kick's aim spread — the same sigma the aim-ring is sized from. */
 export function riskLabel(sigma: number): string {
-  if (sigma < 1.2) return "Safe";
-  if (sigma < 2.5) return "Risky";
+  if (sigma < 0.6) return "Safe";
+  if (sigma < 1.4) return "Risky";
   return "Very risky";
 }
 

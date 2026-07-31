@@ -320,19 +320,25 @@ export function Game({ mode, onExitToMenu }: Props) {
     setResolving(true);
     setEvents([]);
 
-    const { snapshots, events: turnEvents, goal } = resolveTurn(inputPawns, ball);
+    const { snapshots, goal } = resolveTurn(inputPawns, ball);
     let prevPawns = inputPawns;
     let prevBallPos = ball.pos;
+    // Revealed tick-by-tick in step with the animation, rather than dumped
+    // all at once after everything's already finished moving — otherwise
+    // there's no way to tell which skill check/interception happened when.
+    let revealedEvents: string[] = [];
     for (const snapshot of snapshots) {
       const stillMoving = !nothingMoved(snapshot.pawns, snapshot.ball, prevPawns, prevBallPos);
       setPawns(snapshot.pawns);
       setBall({ pos: snapshot.ball });
+      if (snapshot.events.length > 0) {
+        revealedEvents = [...revealedEvents, ...snapshot.events];
+        setEvents(revealedEvents);
+      }
       await sleep(stillMoving ? 350 : 80);
       prevPawns = snapshot.pawns;
       prevBallPos = snapshot.ball;
     }
-
-    setEvents(turnEvents);
 
     if (goal) {
       if (goal === "home") setHomeScore((s) => s + 1);

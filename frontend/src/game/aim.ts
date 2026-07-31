@@ -9,14 +9,16 @@ import type { Vec2 } from "./types";
  * visualize; for now it's just what every kick's landing point runs through.
  */
 
-// Tuned so a short pass (distance ~5) lands reliably inside CAPTURE_RADIUS
-// while a near-max-range shot (distance ~35) scatters well beyond it — the
-// dynamic range that felt flat on the old 16x12 pitch, where BASE_SPREAD
-// dominated the formula regardless of distance.
-const BASE_SPREAD = 0.3;
-const DISTANCE_SPREAD_FACTOR = 0.12;
-const SKILL_SPREAD_FACTOR = 0.08;
-const MIN_SIGMA = 0.2;
+// Tuned so a short pass (distance ~3) lands reliably inside CAPTURE_RADIUS
+// while a near-max-range shot (distance ~20, close to KICK_RANGE) scatters
+// well beyond it. Re-derived alongside the interaction-radii tuning pass
+// that shrank CAPTURE_RADIUS/KICK_RANGE back down to a tighter, more
+// personal-space-sized scale — these track that same scale, not the raw
+// pitch dimensions.
+const BASE_SPREAD = 0.12;
+const DISTANCE_SPREAD_FACTOR = 0.095;
+const SKILL_SPREAD_FACTOR = 0.03;
+const MIN_SIGMA = 0.08;
 // Skill value treated as "average" — passers above it tighten the spread,
 // passers below it widen it. Matches the ~50-70 band the seeded players
 // currently use as a mid-table skill level.

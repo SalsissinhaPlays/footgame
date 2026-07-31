@@ -27,11 +27,12 @@ import type { Ball, Pawn, Side, Vec2 } from "./types";
 export interface ResolveSnapshot {
   pawns: Pawn[];
   ball: Vec2;
+  /** Events that occurred during this specific tick — lets a UI reveal the log in sync with the animation instead of dumping everything at the end. */
+  events: string[];
 }
 
 export interface ResolveResult {
   snapshots: ResolveSnapshot[];
-  events: string[];
   /** Side that scored, if the ball ended the turn inside a goal mouth. */
   goal: Side | null;
 }
@@ -338,6 +339,17 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
  */
 export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   const events: string[] = [];
+  // Cursor into `events`: everything from here to the current length hasn't
+  // been attached to a snapshot yet. A single running cursor (rather than
+  // resetting it at the top of each tick) is what lets the pre-loop kick
+  // announcement below — pushed before tick 0 even starts — still end up
+  // attached to the first snapshot instead of being silently dropped.
+  let sliceStart = 0;
+  function takeNewEvents(): string[] {
+    const slice = events.slice(sliceStart);
+    sliceStart = events.length;
+    return slice;
+  }
   let current: Pawn[] = pawns.map((p) => ({ ...p }));
   const snapshots: ResolveSnapshot[] = [];
 
@@ -535,8 +547,8 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         ballPos = point;
         events.push(goal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
         const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
-        snapshots.push({ pawns: frozen, ball: { ...ballPos } });
-        return { snapshots, events, goal };
+        snapshots.push({ pawns: frozen, ball: { ...ballPos }, events: takeNewEvents() });
+        return { snapshots, goal };
       }
 
       const clampedPoint = clampBallToBounds(point);
@@ -547,7 +559,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         currentCarrierId = null;
         ballPos = clampedPoint;
         events.push("The ball goes out of play");
-        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
         continue;
       }
 
@@ -565,7 +577,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         // Turnover: freeze everything else right here, mid-turn.
         flight = null;
         currentCarrierId = outcome.interceptedBy.id;
-        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
         break;
       } else if (outcome.deflectedAt) {
         // Contested but not cleanly won — the ball comes off this challenge
@@ -600,8 +612,8 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       if (rollGoal) {
         events.push(rollGoal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
         const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
-        snapshots.push({ pawns: frozen, ball: { ...ballPos } });
-        return { snapshots, events, goal: rollGoal };
+        snapshots.push({ pawns: frozen, ball: { ...ballPos }, events: takeNewEvents() });
+        return { snapshots, goal: rollGoal };
       }
 
       const clampedRollPos = clampBallToBounds(ballPos);
@@ -610,7 +622,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         currentCarrierId = null;
         ballPos = clampedRollPos;
         events.push("The ball goes out of play");
-        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
         continue;
       }
 
@@ -626,7 +638,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         lastControllingSide = winner.side;
         events.push(`${winner.player.name} gets to the loose ball`);
         if (turnover) {
-          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
           break;
         }
       } else if (Math.hypot(roll.vx, roll.vy) < ROLL_STOP_EPS) {
@@ -666,7 +678,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
               lastControllingSide = challenger.side;
               ballPos = { ...challenger.pos };
               events.push(`Tackle: ${challenger.player.name} takes the ball off ${holder.player.name}`);
-              snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+              snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
               break;
             }
             // Not decisive — the ball squirts loose rather than cleanly
@@ -708,13 +720,15 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       }
     }
 
-    snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+    snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
   }
 
   const goal = goalScoredAt(ballPos);
   if (goal) {
     events.push(goal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
+    const last = snapshots[snapshots.length - 1];
+    if (last) last.events.push(...takeNewEvents());
   }
 
-  return { snapshots, events, goal };
+  return { snapshots, goal };
 }
