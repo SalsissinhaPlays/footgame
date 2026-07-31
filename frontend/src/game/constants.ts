@@ -22,10 +22,10 @@ export const BALL_START = { x: Math.floor(GRID_COLS / 2), y: Math.floor(GRID_ROW
 export const OOB_CELLS = 1;
 
 // Distance (grid units, continuous) within which a pawn can receive, contest,
-// or carry the ball. Pawns still move cell-to-cell, but the ball's position
-// during a kick is a real point along its flight path, not a grid cell — this
-// is what lets a defender's positioning mid-flight (not just at the moment of
-// the kick) matter for interceptions.
+// or carry the ball — the ball's position during a kick is a real point
+// along its flight path, not a grid cell, which is what lets a defender's
+// positioning mid-flight (not just at the moment of the kick) matter for
+// interceptions.
 export const CAPTURE_RADIUS = 0.75;
 
 // A contest's margin (winner's roll minus runner-up's, see contest.ts) has to
@@ -51,3 +51,18 @@ export const ROLL_STOP_EPS = 0.15; // below this speed the ball is considered st
 // chance to react to it (see reactions.ts) and consider abandoning their
 // planned move to chase it down instead.
 export const REACT_RADIUS = 3;
+
+// Pawn movement: real distance per tick in any direction, not a grid-cell
+// step in one of 8 compass headings. (The old cell-stepping model was also
+// inconsistent here — a diagonal step covered √2≈1.41 units/tick while an
+// orthogonal one covered only 1.0 — so this also fixes that, not just
+// changes it.) MOVE_RANGE stays "ticks per turn" (the ball's flight/roll
+// loop also iterates that many times); this is what decouples "how many
+// ticks resolve" from "how far a pawn can actually travel."
+export const PAWN_SPEED_PER_TICK = 1.2;
+// Minimum distance kept between any two pawns — the continuous equivalent
+// of "a different cell."
+export const PAWN_COLLISION_RADIUS = 0.9;
+// Total real-distance reach for a turn's move, used wherever planning
+// (human click or AI) decides which destinations are reachable this turn.
+export const PAWN_MOVE_BUDGET = MOVE_RANGE * PAWN_SPEED_PER_TICK;

@@ -4,8 +4,8 @@ import {
   GRID_COLS,
   GRID_ROWS,
   KICK_RANGE,
-  MOVE_RANGE,
   OOB_CELLS,
+  PAWN_MOVE_BUDGET,
 } from "./constants";
 import { lineCells } from "./resolve";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
@@ -43,13 +43,21 @@ function hasClearLane(from: Vec2, to: Vec2, obstacles: Pawn[]): boolean {
   return !path.some((cell) => obstacles.some((o) => o.pos.x === cell.x && o.pos.y === cell.y));
 }
 
-/** Destination up to `maxCells` away from `pos`, heading straight toward `dest`, clamped to the field. */
-function moveToward(pos: Vec2, dest: Vec2, maxCells: number): Vec2 {
+/**
+ * Destination up to `maxDistance` (real, Euclidean) away from `pos`, heading
+ * straight toward `dest`, clamped to the field. Euclidean rather than
+ * Chebyshev because the engine now actually walks a pawn there at a real
+ * distance-per-tick pace in any direction — a Chebyshev clamp would let the
+ * AI plan diagonal destinations it can't really reach in one turn. Still
+ * rounds to a whole cell: AI planning stays cell-granular, only the
+ * resolution engine's own movement is continuous.
+ */
+function moveToward(pos: Vec2, dest: Vec2, maxDistance: number): Vec2 {
   const dx = dest.x - pos.x;
   const dy = dest.y - pos.y;
-  const distance = Math.max(Math.abs(dx), Math.abs(dy));
+  const distance = Math.hypot(dx, dy);
   if (distance === 0) return { ...pos };
-  const factor = Math.min(1, maxCells / distance);
+  const factor = Math.min(1, maxDistance / distance);
   const target = {
     x: Math.round(pos.x + dx * factor),
     y: Math.round(pos.y + dy * factor),
@@ -81,7 +89,7 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
     if (pawn.player.position === "GK") {
       const targetY = Math.max(GOAL_ROW_MIN, Math.min(GOAL_ROW_MAX, ball.pos.y));
       const target = { x: home.x + (aiSide === "home" ? 1 : -1), y: targetY };
-      return { ...pawn, plannedPos: moveToward(pawn.pos, target, MOVE_RANGE), plannedKick: null };
+      return { ...pawn, plannedPos: moveToward(pawn.pos, target, PAWN_MOVE_BUDGET), plannedKick: null };
     }
 
     if (carrier && pawn.id === carrier.id) {
@@ -99,7 +107,7 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
         return { ...pawn, plannedKick: passTarget.pos, plannedPos: null };
       }
 
-      return { ...pawn, plannedPos: moveToward(pawn.pos, goalLine, MOVE_RANGE), plannedKick: null };
+      return { ...pawn, plannedPos: moveToward(pawn.pos, goalLine, PAWN_MOVE_BUDGET), plannedKick: null };
     }
 
     if (carrier) {
@@ -108,7 +116,7 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
     }
 
     if (pawn.id === closestChaserId) {
-      return { ...pawn, plannedPos: moveToward(pawn.pos, ball.pos, MOVE_RANGE), plannedKick: null };
+      return { ...pawn, plannedPos: moveToward(pawn.pos, ball.pos, PAWN_MOVE_BUDGET), plannedKick: null };
     }
 
     return { ...pawn, plannedPos: moveToward(pawn.pos, home, 1), plannedKick: null };

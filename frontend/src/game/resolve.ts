@@ -9,6 +9,8 @@ import {
   GRID_COLS,
   KICK_RANGE,
   MOVE_RANGE,
+  PAWN_COLLISION_RADIUS,
+  PAWN_SPEED_PER_TICK,
   REACT_RADIUS,
   ROLL_FRICTION,
   ROLL_START_SPEED,
@@ -52,22 +54,31 @@ function key(v: Vec2): string {
   return `${v.x},${v.y}`;
 }
 
-/**
- * Candidate single-cell steps from `pos` toward `dest`, best first: the direct
- * diagonal, then sidestepping around an obstacle using only the horizontal or
- * only the vertical component. Lets a pawn skirt a stationary blocker instead
- * of being stuck the instant the straight line to its target is occupied.
- */
-function candidateSteps(pos: Vec2, dest: Vec2): Vec2[] {
-  const dx = Math.sign(dest.x - pos.x);
-  const dy = Math.sign(dest.y - pos.y);
-  if (dx === 0 && dy === 0) return [{ ...pos }];
+// Best-first fallback headings, as an angular deviation off the ideal
+// direction toward a destination — the continuous equivalent of the old
+// diagonal/horizontal/vertical-only sidestep options, just not locked to
+// grid-aligned compass directions.
+const SIDESTEP_ANGLES_DEG = [0, -30, 30, -60, 60, -90, 90];
 
-  const options: Vec2[] = [];
-  if (dx !== 0 && dy !== 0) options.push({ x: pos.x + dx, y: pos.y + dy });
-  if (dx !== 0) options.push({ x: pos.x + dx, y: pos.y });
-  if (dy !== 0) options.push({ x: pos.x, y: pos.y + dy });
-  return options;
+/**
+ * Candidate next positions from `pos` toward `dest`, best first: stepping
+ * directly toward the destination at up to PAWN_SPEED_PER_TICK (clamped so a
+ * pawn doesn't overshoot when already close), then trying increasing angular
+ * deviations off that ideal direction to skirt an obstacle. Lets a pawn
+ * route around a stationary blocker instead of being stuck the instant the
+ * straight line to its target is occupied.
+ */
+function candidateHeadings(pos: Vec2, dest: Vec2): Vec2[] {
+  const toDest = { x: dest.x - pos.x, y: dest.y - pos.y };
+  const remaining = Math.hypot(toDest.x, toDest.y);
+  if (remaining < 1e-6) return [{ ...pos }];
+
+  const dir = normalizeVec(toDest);
+  const step = Math.min(PAWN_SPEED_PER_TICK, remaining);
+  return SIDESTEP_ANGLES_DEG.map((deg) => {
+    const rotated = rotateVec(dir, (deg * Math.PI) / 180);
+    return { x: pos.x + rotated.x * step, y: pos.y + rotated.y * step };
+  });
 }
 
 /** Grid cells crossed in a straight line from `start` to `end`, excluding `start`. */
@@ -269,9 +280,12 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
 }
 
 /**
- * Resolves one full turn tick by tick. Invariant that must never break:
- * no two pawns may occupy the same cell in any snapshot. Collisions are
- * settled with a skill check; losers are stopped for the rest of the turn.
+ * Resolves one full turn tick by tick. Invariant that must never break: no
+ * two pawns may ever be closer than PAWN_COLLISION_RADIUS in any snapshot.
+ * Pawns move continuously (any direction, real distance per tick) rather
+ * than stepping cell-to-cell, so this is a proximity guarantee, not an
+ * exact-cell one. Collisions are settled with a skill check; losers are
+ * stopped for the rest of the turn.
  *
  * The ball and pawn movement share this same tick loop rather than being two
  * sequential phases: a kicked ball is checked against every pawn's
@@ -313,12 +327,12 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     currentCarrierId = null;
   }
 
-  // Each pawn's final destination for the turn; movement advances one cell
-  // per tick toward it, so a pawn blocked mid-way keeps whatever progress it
-  // already made instead of losing the whole turn. Reacting to a loose ball
-  // (below) overrides a pawn's entry here instead of needing its own
-  // movement path — it goes through the exact same candidateSteps/collision
-  // machinery as any planned move.
+  // Each pawn's final destination for the turn; movement advances up to
+  // PAWN_SPEED_PER_TICK real distance toward it each tick, so a pawn blocked
+  // mid-way keeps whatever progress it already made instead of losing the
+  // whole turn. Reacting to a loose ball (below) overrides a pawn's entry
+  // here instead of needing its own movement path — it goes through the
+  // exact same candidateHeadings/collision machinery as any planned move.
   const destinations = new Map(current.map((p) => [p.id, p.plannedPos ?? p.pos]));
   const stopped = new Set<string>();
   // Pawns who've committed to chasing a loose ball instead of their planned
@@ -340,7 +354,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     // Recomputed fresh every tick, since a blocker from an earlier tick may
     // have since moved out of the way.
     const candidates = new Map(
-      current.map((p) => [p.id, candidateSteps(p.pos, destinations.get(p.id)!)])
+      current.map((p) => [p.id, candidateHeadings(p.pos, destinations.get(p.id)!)])
     );
     const candidateIndex = new Map(current.map((p) => [p.id, 0]));
     const intended = new Map<string, Vec2>();
@@ -348,9 +362,14 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       intended.set(p.id, stopped.has(p.id) ? p.pos : candidates.get(p.id)![0]);
     }
 
-    const isMoving = (id: string) => key(intended.get(id)!) !== key(preTickPos.get(id)!);
-    const occupantOf = (cell: Vec2, excludeId: string) =>
-      current.find((o) => o.id !== excludeId && key(preTickPos.get(o.id)!) === key(cell));
+    const isMoving = (id: string) => distance(intended.get(id)!, preTickPos.get(id)!) > 1e-6;
+    // A pawn that is NOT moving this tick and sits within radius of `pos` —
+    // a genuine hard block, as opposed to a pawn that merely happens to be
+    // nearby but is vacating the area too (which isn't a real obstacle).
+    const stationaryBlockerAt = (pos: Vec2, excludeId: string) =>
+      current.find(
+        (o) => o.id !== excludeId && !isMoving(o.id) && distance(preTickPos.get(o.id)!, pos) <= PAWN_COLLISION_RADIUS
+      );
 
     // Settling one collision can create a new one (e.g. a pawn frozen by rule 3
     // becomes a hard block for someone else's path), so all three rules run
@@ -366,31 +385,53 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       // put this tick — it can still try again next tick either way.
       for (const p of current) {
         if (!isMoving(p.id)) continue;
-        let occupant = occupantOf(intended.get(p.id)!, p.id);
-        while (occupant && !isMoving(occupant.id)) {
+        // Combine "is anyone there" and "are they actually a stationary
+        // blocker" into one predicate — otherwise, when a candidate position
+        // happens to be within radius of BOTH a moving pawn (vacating the
+        // area, not really blocking) AND a separate stationary one, `.find`
+        // could return the moving one first and wrongly conclude there's no
+        // block at all, masking the real one.
+        let blocker = stationaryBlockerAt(intended.get(p.id)!, p.id);
+        while (blocker) {
           const options = candidates.get(p.id)!;
           const nextIndex = candidateIndex.get(p.id)! + 1;
           if (nextIndex >= options.length) {
             intended.set(p.id, preTickPos.get(p.id)!);
-            occupant = undefined;
+            blocker = undefined;
           } else {
             candidateIndex.set(p.id, nextIndex);
             intended.set(p.id, options[nextIndex]);
-            occupant = occupantOf(intended.get(p.id)!, p.id);
+            blocker = stationaryBlockerAt(intended.get(p.id)!, p.id);
           }
           changed = true;
         }
       }
 
-      // Rule 2: direct swaps (A -> B's cell, B -> A's cell). Neither completes
-      // the crossing this tick; the loser is stopped for good, the winner may
-      // try again on a later tick.
+      // Rule 2: swaps — each pawn's intended position lands within
+      // PAWN_COLLISION_RADIUS of where the OTHER currently stands (a
+      // generalization of "exact reversal" for continuous positions: two
+      // pawns heading into each other's space, not necessarily a pixel-perfect
+      // trade). Neither completes the crossing this tick; the loser is
+      // stopped for good, the winner may try again on a later tick.
       for (const p of current) {
         if (!isMoving(p.id) || stopped.has(p.id)) continue;
         const dest = intended.get(p.id)!;
-        const occupant = occupantOf(dest, p.id);
-        if (!occupant || !isMoving(occupant.id) || stopped.has(occupant.id)) continue;
-        if (key(intended.get(occupant.id)!) !== key(preTickPos.get(p.id)!)) continue;
+        // Same combined-predicate approach as Rule 1: search for a pawn that
+        // satisfies the FULL swap condition (moving, not stopped, heading
+        // roughly into p's current spot while p heads into theirs) in one
+        // pass, rather than taking whichever pawn happens to be nearest
+        // `dest` first and only then checking if it qualifies — otherwise an
+        // unrelated nearby pawn that fails one condition could mask a real
+        // swap partner a little further off but still within radius.
+        const occupant = current.find(
+          (o) =>
+            o.id !== p.id &&
+            isMoving(o.id) &&
+            !stopped.has(o.id) &&
+            distance(preTickPos.get(o.id)!, dest) <= PAWN_COLLISION_RADIUS &&
+            distance(intended.get(o.id)!, preTickPos.get(p.id)!) <= PAWN_COLLISION_RADIUS
+        );
+        if (!occupant) continue;
 
         const winner = resolveContest([p, occupant], "loose_ball");
         const loser = winner.id === p.id ? occupant : p;
@@ -403,20 +444,28 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         changed = true;
       }
 
-      // Rule 3: two or more pawns converging on the same free cell.
-      const destGroups = new Map<string, string[]>();
-      for (const p of current) {
-        if (!isMoving(p.id)) continue;
-        const arr = destGroups.get(key(intended.get(p.id)!)) ?? [];
-        arr.push(p.id);
-        destGroups.set(key(intended.get(p.id)!), arr);
-      }
-      for (const [cellKey, ids] of destGroups) {
-        if (ids.length <= 1) continue;
-        const contestants = ids.map((id) => current.find((p) => p.id === id)!);
+      // Rule 3: three-plus-way contests — pawns converging on intended
+      // positions that are mutually close, not necessarily identical. Grouped
+      // by simple proximity (not a full transitive closure — pawn counts are
+      // small enough that this is a non-issue in practice) rather than an
+      // exact-cell key, since "the same free cell" doesn't mean anything once
+      // destinations are continuous.
+      const movingIds = current.filter((p) => isMoving(p.id)).map((p) => p.id);
+      const grouped = new Set<string>();
+      for (const id of movingIds) {
+        if (grouped.has(id)) continue;
+        const group = movingIds.filter(
+          (otherId) =>
+            !grouped.has(otherId) &&
+            distance(intended.get(id)!, intended.get(otherId)!) <= PAWN_COLLISION_RADIUS
+        );
+        if (group.length <= 1) continue;
+        for (const gid of group) grouped.add(gid);
+
+        const contestants = group.map((gid) => current.find((p) => p.id === gid)!);
         const winner = resolveContest(contestants, "loose_ball");
         events.push(
-          `Disputa em (${cellKey}): ${contestants.map((c) => c.player.name).join(" vs ")} — vence ${winner.player.name}`
+          `Disputa por espaço: ${contestants.map((c) => c.player.name).join(" vs ")} — vence ${winner.player.name}`
         );
         for (const c of contestants) {
           if (c.id !== winner.id) {

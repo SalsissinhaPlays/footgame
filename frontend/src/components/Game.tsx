@@ -6,8 +6,8 @@ import {
   GRID_COLS,
   GRID_ROWS,
   KICK_RANGE,
-  MOVE_RANGE,
   OOB_CELLS,
+  PAWN_MOVE_BUDGET,
   TOTAL_TURNS,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
@@ -31,6 +31,10 @@ function nothingMoved(pawns: Pawn[], ballPos: Vec2, prevPawns: Pawn[], prevBallP
 
 function chebyshevDistance(a: Vec2, b: Vec2): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+}
+
+function euclideanDistance(a: Vec2, b: Vec2): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function inBounds(pos: Vec2): boolean {
@@ -168,14 +172,27 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   const reachableCells = (() => {
     if (!selectedPawn) return new Set<string>();
-    const range = kickMode && selectedIsCarrier ? KICK_RANGE : MOVE_RANGE;
+    const isKick = kickMode && selectedIsCarrier;
+    // A pawn's resting position is no longer guaranteed to land exactly on a
+    // cell (the engine walks it there continuously) — cell keys themselves
+    // are always integers, so the loop has to anchor on a rounded origin and
+    // then measure true distance from the pawn's real (possibly fractional)
+    // position, rather than offsetting directly from pos.x/y.
+    const originX = Math.round(selectedPawn.pos.x);
+    const originY = Math.round(selectedPawn.pos.y);
+    const range = isKick ? KICK_RANGE : Math.ceil(PAWN_MOVE_BUDGET);
     const cells = new Set<string>();
     for (let dx = -range; dx <= range; dx++) {
       for (let dy = -range; dy <= range; dy++) {
-        const cell = { x: selectedPawn.pos.x + dx, y: selectedPawn.pos.y + dy };
-        if (inBounds(cell) && chebyshevDistance(selectedPawn.pos, cell) <= range) {
-          cells.add(`${cell.x},${cell.y}`);
-        }
+        const cell = { x: originX + dx, y: originY + dy };
+        if (!inBounds(cell)) continue;
+        // Kick range keeps its existing Chebyshev metric (unchanged, still
+        // matches resolve.ts's kick-clamp math); move range switches to
+        // Euclidean, matching the engine's real any-direction movement.
+        const within = isKick
+          ? chebyshevDistance(selectedPawn.pos, cell) <= range
+          : euclideanDistance(selectedPawn.pos, cell) <= PAWN_MOVE_BUDGET;
+        if (within) cells.add(`${cell.x},${cell.y}`);
       }
     }
     return cells;
