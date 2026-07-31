@@ -13,7 +13,7 @@ import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
 import { TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
-import type { Ball, Pawn, TeamDTO, Vec2 } from "../game/types";
+import type { Ball, Pawn, Stance, TeamDTO, Vec2 } from "../game/types";
 import type { MatchCallbacks } from "../phaser/MatchScene";
 import { MatchScene } from "../phaser/MatchScene";
 import { PhaserGame } from "../phaser/PhaserGame";
@@ -106,6 +106,9 @@ export function Game({ mode, onExitToMenu }: Props) {
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
+  // True while the player has picked "Man-mark" for the selected pawn and
+  // is now expected to click an opponent pawn instead of a cell/destination.
+  const [pickingMarkTarget, setPickingMarkTarget] = useState(false);
   const [controllingSide, setControllingSide] = useState<"home" | "away">("home");
   const [readySides, setReadySides] = useState<Set<"home" | "away">>(new Set());
   const [handoff, setHandoff] = useState(false);
@@ -249,8 +252,19 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   function handlePawnClick(pawn: Pawn) {
     if (resolving) return;
+    if (pickingMarkTarget && selectedPawn && pawn.side !== controllingSide) {
+      setPawns((prev) =>
+        prev.map((p) =>
+          p.id === selectedPawn.id ? { ...p, stance: { kind: "man_mark", targetId: pawn.id } } : p
+        )
+      );
+      setPickingMarkTarget(false);
+      setSelectedId(null);
+      return;
+    }
     if (pawn.side !== controllingSide) return;
     setKickMode(false);
+    setPickingMarkTarget(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
   }
 
@@ -278,6 +292,14 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
     setSelectedId(null);
     setKickMode(false);
+    setPickingMarkTarget(false);
+  }
+
+  /** Sets (or clears, with `null`) the selected pawn's stance for this turn. */
+  function handleSetStance(stance: Stance | null) {
+    if (!selectedPawn) return;
+    setPawns((prev) => prev.map((p) => (p.id === selectedPawn.id ? { ...p, stance } : p)));
+    setPickingMarkTarget(false);
   }
 
   // Keep the Phaser-facing callbacks stable (set once when the scene mounts)
@@ -337,6 +359,12 @@ export function Game({ mode, onExitToMenu }: Props) {
       prevBallPos = snapshot.ball;
     }
 
+    // A stance is a standing order for this turn only — resolve.ts relies on
+    // it staying put across every tick of the turn it was set for (so a
+    // man-marking pawn keeps re-aiming), but it shouldn't silently carry
+    // over once planning for the NEXT turn begins.
+    setPawns((prev) => prev.map((p) => (p.stance ? { ...p, stance: null } : p)));
+
     if (goal) {
       if (goal === "home") setHomeScore((s) => s + 1);
       else setAwayScore((s) => s + 1);
@@ -355,6 +383,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (resolving) return;
     setSelectedId(null);
     setKickMode(false);
+    setPickingMarkTarget(false);
 
     if (mode === "ai") {
       const withAiMoves = planAiTurn(pawns, ball, "away");
@@ -448,6 +477,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           the other team can't see your moves until resolution.
         </p>
       )}
+      {pickingMarkTarget && <p className="hint">Click an opponent pawn to mark.</p>}
       {selectedIsCarrier && (
         <div className="kick-toggle">
           <span>Pawn with the ball — choose an action:</span>
@@ -464,6 +494,46 @@ export function Game({ mode, onExitToMenu }: Props) {
             onClick={() => setKickMode(true)}
           >
             Kick
+          </button>
+        </div>
+      )}
+      {selectedPawn && !selectedIsCarrier && (
+        <div className="kick-toggle">
+          <span>Off-ball pawn — set a stance:</span>
+          <button
+            type="button"
+            className={selectedPawn.stance === null ? "active" : ""}
+            onClick={() => handleSetStance(null)}
+          >
+            None
+          </button>
+          <button
+            type="button"
+            className={selectedPawn.stance?.kind === "aggressive" ? "active" : ""}
+            onClick={() => handleSetStance({ kind: "aggressive" })}
+          >
+            Aggressive
+          </button>
+          <button
+            type="button"
+            className={selectedPawn.stance?.kind === "pressure" ? "active" : ""}
+            onClick={() => handleSetStance({ kind: "pressure" })}
+          >
+            Pressure
+          </button>
+          <button
+            type="button"
+            className={selectedPawn.stance?.kind === "cover_passing" ? "active" : ""}
+            onClick={() => handleSetStance({ kind: "cover_passing" })}
+          >
+            Cover passing
+          </button>
+          <button
+            type="button"
+            className={pickingMarkTarget || selectedPawn.stance?.kind === "man_mark" ? "active" : ""}
+            onClick={() => setPickingMarkTarget(true)}
+          >
+            Man-mark
           </button>
         </div>
       )}

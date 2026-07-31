@@ -92,3 +92,29 @@ export const TACKLE_RADIUS = 1.7;
 // regardless of pitch size (at 1:1 with world units, a 60x40 pitch would be
 // 2400 individually-drawn tiles instead of the ~150 this gives).
 export const CHECKER_CELL_SIZE = 4;
+
+// Stance bonuses (see contest.ts's stanceBonus): small additive terms on top
+// of a contest roll, scaled by the same attributes contest.ts's own weight
+// tables use — a factor here times pawn.player.<attribute>, not a flat
+// number, so these automatically read against whatever new attributes get
+// added later instead of needing a redesign. Roll noise is +/-15 (contest.ts's
+// RANDOM_SPREAD), so a factor of ~0.1-0.15 against a ~50-average attribute
+// gives a bonus in the same ballpark as the random spread — a real edge,
+// not a coin-flip override of the underlying attributes.
+export const STANCE_AGGRESSIVE_PACE_FACTOR = 0.15;
+export const STANCE_COVER_PASSING_SKILL_FACTOR = 0.15;
+export const STANCE_MAN_MARK_SKILL_FACTOR = 0.1;
+export const STANCE_MAN_MARK_PACE_FACTOR = 0.1;
+
+// How strongly a man-marking pawn (with no explicit plannedPos) is pulled
+// toward its target's live position each tick — 1 would be a blind full
+// chase; this keeps some positional discipline instead ("focus more, but
+// not exclusively"). Recomputed fresh every tick against the target's
+// current position, same as the loose-ball-chase re-aiming in resolve.ts.
+export const MAN_MARK_PULL_WEIGHT = 0.7;
+
+// "Pressure" stance: how close an opponent has to be to a pressuring pawn
+// to have its effective per-tick speed cut, and the fraction of normal
+// speed it's left with while inside that radius.
+export const PRESSURE_RADIUS = 2.5;
+export const PRESSURE_SLOW_FACTOR = 0.6;

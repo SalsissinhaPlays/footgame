@@ -1,3 +1,9 @@
+import {
+  STANCE_AGGRESSIVE_PACE_FACTOR,
+  STANCE_COVER_PASSING_SKILL_FACTOR,
+  STANCE_MAN_MARK_PACE_FACTOR,
+  STANCE_MAN_MARK_SKILL_FACTOR,
+} from "./constants";
 import type { Pawn } from "./types";
 
 /**
@@ -36,13 +42,43 @@ const WEIGHTS: Record<ContestKind, AttributeWeights> = {
 
 const RANDOM_SPREAD = 30; // roll gets +/- half of this, i.e. +/-15
 
-function rollFor(pawn: Pawn, kind: ContestKind): number {
+/**
+ * Small additive edge from a pawn's standing stance (see types.ts's Stance),
+ * on top of the base attribute-weighted roll above. `against` is the other
+ * contestant in a head-to-head roll (tackle/interception are always 2-way in
+ * practice) — man-marking only pays off against the specific pawn it's
+ * targeting, not generically. Every term is a factor times a real attribute
+ * rather than a flat number, so these automatically track whatever new
+ * attributes get added later instead of needing a redesign.
+ */
+function stanceBonus(pawn: Pawn, against: Pawn | null, kind: ContestKind): number {
+  const stance = pawn.stance;
+  if (!stance) return 0;
+  if (stance.kind === "aggressive" && kind === "tackle") {
+    return pawn.player.pace * STANCE_AGGRESSIVE_PACE_FACTOR;
+  }
+  if (stance.kind === "cover_passing" && kind === "interception") {
+    return pawn.player.skill * STANCE_COVER_PASSING_SKILL_FACTOR;
+  }
+  if (
+    stance.kind === "man_mark" &&
+    against &&
+    stance.targetId === against.id &&
+    (kind === "tackle" || kind === "interception")
+  ) {
+    return pawn.player.skill * STANCE_MAN_MARK_SKILL_FACTOR + pawn.player.pace * STANCE_MAN_MARK_PACE_FACTOR;
+  }
+  return 0;
+}
+
+function rollFor(pawn: Pawn, kind: ContestKind, against: Pawn | null): number {
   const w = WEIGHTS[kind];
   const { skill, pace, stamina } = pawn.player;
   return (
     skill * w.skill +
     pace * w.pace +
     stamina * w.stamina +
+    stanceBonus(pawn, against, kind) +
     (Math.random() * RANDOM_SPREAD - RANDOM_SPREAD / 2)
   );
 }
@@ -55,8 +91,16 @@ export interface ContestOutcome {
 
 /** Highest roll wins a multi-way contest (a group of pawns converging on the same cell, or several pawns near a loose ball). */
 export function resolveContestDetailed(contestants: Pawn[], kind: ContestKind): ContestOutcome {
+  // Only a genuine 1-on-1 has a well-defined "the pawn I'm up against" for
+  // man-marking to key off; group contests (3+ pawns converging on a loose
+  // ball) get no stance bonus from this — rollFor just treats `against` as
+  // null for them.
+  const against = contestants.length === 2 ? contestants : null;
   const rolls = contestants
-    .map((pawn) => ({ pawn, roll: rollFor(pawn, kind) }))
+    .map((pawn) => ({
+      pawn,
+      roll: rollFor(pawn, kind, against ? against.find((p) => p !== pawn)! : null),
+    }))
     .sort((a, b) => b.roll - a.roll);
   const runnerUpRoll = rolls.length > 1 ? rolls[1].roll : rolls[0].roll;
   return { winner: rolls[0].pawn, margin: rolls[0].roll - runnerUpRoll };

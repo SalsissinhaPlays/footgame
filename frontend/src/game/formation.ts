@@ -35,6 +35,7 @@ export function buildFormation(players: PlayerDTO[], side: Side): Pawn[] {
       pos,
       plannedPos: null,
       plannedKick: null,
+      stance: null,
     };
   });
 }

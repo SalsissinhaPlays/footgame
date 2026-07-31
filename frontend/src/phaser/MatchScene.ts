@@ -8,6 +8,7 @@ import {
   GRID_COLS,
   GRID_ROWS,
   PAWN_COLLISION_RADIUS,
+  PRESSURE_RADIUS,
   TACKLE_RADIUS,
 } from "../game/constants";
 import {
@@ -442,6 +443,12 @@ export class MatchScene extends Phaser.Scene {
       const pts = isoCircle(p, pawn.pos.x + 0.5, pawn.pos.y + 0.5, PAWN_COLLISION_RADIUS, 20);
       g.lineStyle(1, 0xffffff, 0.25);
       strokePoly(g, pts, true);
+
+      if (pawn.stance?.kind === "pressure") {
+        const pressurePts = isoCircle(p, pawn.pos.x + 0.5, pawn.pos.y + 0.5, PRESSURE_RADIUS, 24);
+        g.lineStyle(1.5, 0xab47bc, 0.5);
+        strokePoly(g, pressurePts, true);
+      }
     }
 
     const carrier = pawns.find((pw) => pw.pos.x === ball.pos.x && pw.pos.y === ball.pos.y);
@@ -465,7 +472,8 @@ export class MatchScene extends Phaser.Scene {
 
     for (const pawn of pawns) {
       seen.add(pawn.id);
-      const visible = pawn.side === controllingSide ? pawn : { ...pawn, plannedPos: null, plannedKick: null };
+      const visible =
+        pawn.side === controllingSide ? pawn : { ...pawn, plannedPos: null, plannedKick: null, stance: null };
       let visual = this.pawnVisuals.get(pawn.id);
       if (!visual) {
         visual = this.createPawnVisual(pawn);
@@ -608,6 +616,15 @@ export class MatchScene extends Phaser.Scene {
     for (const pawn of this.state.pawns) {
       if (pawn.side !== this.state.controllingSide) continue;
       const base = p.toIso(pawn.pos.x + 0.5, pawn.pos.y + 0.5);
+      const stance = pawn.stance;
+      if (stance?.kind === "man_mark") {
+        const target = this.state.pawns.find((t) => t.id === stance.targetId);
+        if (target) {
+          const targetIso = p.toIso(target.pos.x + 0.5, target.pos.y + 0.5);
+          g.lineStyle(1.5, 0xab47bc, 0.7);
+          g.lineBetween(base.x, base.y, targetIso.x, targetIso.y);
+        }
+      }
       if (pawn.plannedPos) {
         const planned = p.toIso(pawn.plannedPos.x + 0.5, pawn.plannedPos.y + 0.5);
         g.lineStyle(2.5, 0xffeb3b, 1);

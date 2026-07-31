@@ -9,10 +9,13 @@ import {
   GRID_COLS,
   GRID_ROWS,
   KICK_RANGE,
+  MAN_MARK_PULL_WEIGHT,
   MOVE_RANGE,
   OOB_CELLS,
   PAWN_COLLISION_RADIUS,
   PAWN_SPEED_PER_TICK,
+  PRESSURE_RADIUS,
+  PRESSURE_SLOW_FACTOR,
   REACT_RADIUS,
   ROLL_FRICTION,
   ROLL_START_SPEED,
@@ -104,19 +107,21 @@ const SIDESTEP_ANGLES_DEG = [0, -30, 30, -60, 60, -90, 90];
 
 /**
  * Candidate next positions from `pos` toward `dest`, best first: stepping
- * directly toward the destination at up to PAWN_SPEED_PER_TICK (clamped so a
- * pawn doesn't overshoot when already close), then trying increasing angular
+ * directly toward the destination at up to `speed` (clamped so a pawn
+ * doesn't overshoot when already close), then trying increasing angular
  * deviations off that ideal direction to skirt an obstacle. Lets a pawn
  * route around a stationary blocker instead of being stuck the instant the
- * straight line to its target is occupied.
+ * straight line to its target is occupied. `speed` defaults to the normal
+ * per-tick rate but can be reduced (e.g. by a nearby "pressure"-stance
+ * opponent) without touching the sidestep logic itself.
  */
-function candidateHeadings(pos: Vec2, dest: Vec2): Vec2[] {
+function candidateHeadings(pos: Vec2, dest: Vec2, speed: number = PAWN_SPEED_PER_TICK): Vec2[] {
   const toDest = { x: dest.x - pos.x, y: dest.y - pos.y };
   const remaining = Math.hypot(toDest.x, toDest.y);
   if (remaining < 1e-6) return [{ ...pos }];
 
   const dir = normalizeVec(toDest);
-  const step = Math.min(PAWN_SPEED_PER_TICK, remaining);
+  const step = Math.min(speed, remaining);
   return SIDESTEP_ANGLES_DEG.map((deg) => {
     const rotated = rotateVec(dir, (deg * Math.PI) / 180);
     return { x: pos.x + rotated.x * step, y: pos.y + rotated.y * step };
@@ -352,6 +357,11 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   }
   let current: Pawn[] = pawns.map((p) => ({ ...p }));
   const snapshots: ResolveSnapshot[] = [];
+  // Captured before the tick loop wipes plannedPos each tick (see the
+  // end-of-tick `plannedPos: null` reset below) — a man-marking pawn's
+  // auto-movement only kicks in when the PLAYER never gave it an explicit
+  // destination this turn; an explicit click always wins.
+  const hasExplicitPlan = new Set(current.filter((p) => p.plannedPos !== null).map((p) => p.id));
 
   // Whoever starts the turn within capture range of the ball carries it. If
   // nobody is there, the ball just sits still until someone reaches it.
@@ -409,11 +419,38 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       destinations.set(id, { ...ballPos });
     }
 
+    // Man-marking pawns with no explicit order re-aim every tick too, at a
+    // point blended between the marked opponent's live position and the
+    // marker's own current spot ("focus more, but not exclusively" — a full
+    // pull would be a blind chase). An explicit plannedPos already took
+    // priority when `destinations` was built above and is never touched here.
+    for (const p of current) {
+      const stance = p.stance;
+      if (!stance || stance.kind !== "man_mark" || hasExplicitPlan.has(p.id)) continue;
+      const target = current.find((t) => t.id === stance.targetId);
+      if (!target) continue;
+      destinations.set(p.id, {
+        x: p.pos.x + (target.pos.x - p.pos.x) * MAN_MARK_PULL_WEIGHT,
+        y: p.pos.y + (target.pos.y - p.pos.y) * MAN_MARK_PULL_WEIGHT,
+      });
+    }
+
     const preTickPos = new Map(current.map((p) => [p.id, p.pos]));
+    // A "pressure"-stance pawn saps the effective speed of any opponent
+    // currently within PRESSURE_RADIUS of it, checked against positions as
+    // of the start of this tick — applies regardless of why that opponent
+    // is moving (planned move, loose-ball chase, or man-marking auto-move).
+    const isPressured = (p: Pawn) =>
+      current.some(
+        (o) => o.side !== p.side && o.stance?.kind === "pressure" && distance(p.pos, o.pos) <= PRESSURE_RADIUS
+      );
     // Recomputed fresh every tick, since a blocker from an earlier tick may
     // have since moved out of the way.
     const candidates = new Map(
-      current.map((p) => [p.id, candidateHeadings(p.pos, destinations.get(p.id)!)])
+      current.map((p) => {
+        const speed = isPressured(p) ? PAWN_SPEED_PER_TICK * PRESSURE_SLOW_FACTOR : PAWN_SPEED_PER_TICK;
+        return [p.id, candidateHeadings(p.pos, destinations.get(p.id)!, speed)];
+      })
     );
     const candidateIndex = new Map(current.map((p) => [p.id, 0]));
     const intended = new Map<string, Vec2>();
