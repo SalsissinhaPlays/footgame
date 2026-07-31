@@ -332,26 +332,26 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   if (loading) {
-    return <p>Carregando times...</p>;
+    return <p>Loading teams...</p>;
   }
 
   let resultText: string | null = null;
   if (matchOver) {
-    if (homeScore > awayScore) resultText = `${teams[0]?.name} venceu!`;
-    else if (awayScore > homeScore) resultText = `${teams[1]?.name} venceu!`;
-    else resultText = "Empate!";
+    if (homeScore > awayScore) resultText = `${teams[0]?.name} wins!`;
+    else if (awayScore > homeScore) resultText = `${teams[1]?.name} wins!`;
+    else resultText = "Draw!";
   }
 
   if (handoff) {
     const nextSideName = controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
     return (
       <div className="game-wrapper handoff-screen" ref={wrapperRef}>
-        <h2>Passe o computador</h2>
+        <h2>Pass the computer</h2>
         <p>
-          Agora é a vez do <strong>{nextSideName}</strong> planejar seus movimentos.
+          It's now <strong>{nextSideName}</strong>'s turn to plan their moves.
         </p>
         <button type="button" onClick={handleContinueHandoff}>
-          Continuar
+          Continue
         </button>
       </div>
     );
@@ -366,7 +366,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           ← Menu
         </button>
         <button type="button" className="exit-button" onClick={toggleFullscreen}>
-          {isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+          {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
         </button>
         <h1>
           {teams[0]?.name} <span className="score">{homeScore}</span>
@@ -375,53 +375,53 @@ export function Game({ mode, onExitToMenu }: Props) {
         </h1>
         <div className="game-info">
           <span>
-            Turno {Math.min(turn, TOTAL_TURNS)} / {TOTAL_TURNS}
+            Turn {Math.min(turn, TOTAL_TURNS)} / {TOTAL_TURNS}
           </span>
           <button type="button" onClick={handleReady} disabled={resolving || matchOver}>
-            {resolving ? "Resolvendo..." : mode === "hotseat" ? "Pronto" : "Prosseguir"}
+            {resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
           </button>
         </div>
       </div>
       {!matchOver && mode === "hotseat" && (
-        <p className={`turn-indicator ${controllingSide}`}>Vez de: {controllingSideName}</p>
+        <p className={`turn-indicator ${controllingSide}`}>Turn: {controllingSideName}</p>
       )}
       {matchOver ? (
         <p className="result-banner">{resultText}</p>
       ) : mode === "ai" ? (
         <p className="hint">
-          Clique em um peão azul e depois em uma casa destacada para planejar o movimento. Quem
-          estiver em cima da bola a carrega ao se mover. Clique em "Prosseguir" para ver o que o
-          adversário (controlado pelo computador) faz.
+          Click a blue pawn, then a highlighted cell to plan its move. Whoever is standing on the
+          ball carries it when they move. Click "Continue" to see what the computer-controlled
+          opponent does.
         </p>
       ) : mode === "solo" ? (
         <p className="hint">
-          Clique em um peão azul e depois em uma casa destacada para planejar o movimento. Quem
-          estiver em cima da bola a carrega ao se mover. O time adversário fica parado neste modo
-          — é só para testar a mecânica. Clique em "Prosseguir" para executar.
+          Click a blue pawn, then a highlighted cell to plan its move. Whoever is standing on the
+          ball carries it when they move. The opposing team stays put in this mode — it's just for
+          testing the mechanics. Click "Continue" to run it.
         </p>
       ) : (
         <p className="hint">
-          Clique em um peão do time em controle e depois em uma casa destacada para planejar o
-          movimento. Quem estiver em cima da bola a carrega ao se mover. Clique em "Pronto" quando
-          terminar de planejar — o outro time não vê suas jogadas até a resolução.
+          Click a pawn on the team in control, then a highlighted cell to plan its move. Whoever is
+          standing on the ball carries it when they move. Click "Ready" when you're done planning —
+          the other team can't see your moves until resolution.
         </p>
       )}
       {selectedIsCarrier && !matchOver && (
         <div className="kick-toggle">
-          <span>Peão com a bola — escolha a ação:</span>
+          <span>Pawn with the ball — choose an action:</span>
           <button
             type="button"
             className={kickMode ? "" : "active"}
             onClick={() => setKickMode(false)}
           >
-            Mover
+            Move
           </button>
           <button
             type="button"
             className={kickMode ? "active" : ""}
             onClick={() => setKickMode(true)}
           >
-            Chutar
+            Kick
           </button>
         </div>
       )}
@@ -431,8 +431,8 @@ export function Game({ mode, onExitToMenu }: Props) {
         ))}
       </ul>
       <p className="camera-hint">
-        Roda do mouse: zoom. Botão do meio (ou lateral) + arrastar na horizontal: girar a câmera.
-        Arrastar na vertical: ajustar a inclinação.
+        Mouse wheel: zoom. Middle (or side) button + drag horizontally: rotate the camera.
+        Drag vertically: adjust the tilt.
       </p>
       <div
         className="field-viewport"
@@ -444,12 +444,12 @@ export function Game({ mode, onExitToMenu }: Props) {
         onMouseLeave={stopRotating}
         onAuxClick={(e) => e.preventDefault()}
       >
-        {!sceneReady && <p className="hint">Carregando o campo...</p>}
+        {!sceneReady && <p className="hint">Loading the pitch...</p>}
         <PhaserGame onSceneReady={handleSceneReady} />
       </div>
       {(camera.zoom !== 1 || camera.rotation !== 0 || camera.tilt !== TILT_DEFAULT) && (
         <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
-          Resetar câmera
+          Reset camera
         </button>
       )}
     </div>

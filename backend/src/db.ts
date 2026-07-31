@@ -40,12 +40,12 @@ function seedIfEmpty() {
   );
 
   const demoSquad = [
-    { name: "Goleiro Silva", position: "GK", jersey_number: 1, pace: 40, stamina: 60, skill: 55 },
-    { name: "Zagueiro Costa", position: "DEF", jersey_number: 2, pace: 55, stamina: 65, skill: 50 },
-    { name: "Zagueiro Lima", position: "DEF", jersey_number: 3, pace: 50, stamina: 65, skill: 52 },
-    { name: "Meia Souza", position: "MID", jersey_number: 8, pace: 60, stamina: 70, skill: 60 },
-    { name: "Meia Alves", position: "MID", jersey_number: 10, pace: 62, stamina: 68, skill: 65 },
-    { name: "Atacante Rocha", position: "FWD", jersey_number: 9, pace: 70, stamina: 60, skill: 58 },
+    { name: "Goalkeeper Silva", position: "GK", jersey_number: 1, pace: 40, stamina: 60, skill: 55 },
+    { name: "Defender Costa", position: "DEF", jersey_number: 2, pace: 55, stamina: 65, skill: 50 },
+    { name: "Defender Lima", position: "DEF", jersey_number: 3, pace: 50, stamina: 65, skill: 52 },
+    { name: "Midfielder Souza", position: "MID", jersey_number: 8, pace: 60, stamina: 70, skill: 60 },
+    { name: "Midfielder Alves", position: "MID", jersey_number: 10, pace: 62, stamina: 68, skill: 65 },
+    { name: "Striker Rocha", position: "FWD", jersey_number: 9, pace: 70, stamina: 60, skill: 58 },
   ];
 
   for (const teamName of ["Eagle FC", "Rival United"]) {

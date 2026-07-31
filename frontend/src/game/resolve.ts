@@ -292,7 +292,7 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
         interceptedBy: null,
         deflectedAt: null,
         deflectedBy: null,
-        event: `Passe: ${kicker.player.name} encontra ${p.player.name}`,
+        event: `Pass: ${kicker.player.name} finds ${p.player.name}`,
       };
     }
     const { winner, margin } = resolveContestDetailed([p, kicker], "interception");
@@ -303,7 +303,7 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
           interceptedBy: p,
           deflectedAt: null,
           deflectedBy: null,
-          event: `Interceptação: ${p.player.name} corta o chute de ${kicker.player.name}`,
+          event: `Interception: ${p.player.name} cuts out ${kicker.player.name}'s pass`,
         };
       }
       return {
@@ -311,7 +311,7 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
         interceptedBy: null,
         deflectedAt: closestPointOnSegment(p.pos, from, to),
         deflectedBy: p.id,
-        event: `${p.player.name} desvia o chute de ${kicker.player.name} — bola solta!`,
+        event: `${p.player.name} half-blocks ${kicker.player.name}'s shot — loose ball!`,
       };
     }
     flight.contested.add(p.id);
@@ -357,8 +357,8 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     flight = started.flight;
     events.push(
       started.mishit
-        ? `${carrier.player.name} chuta, mas a bola sai imprecisa`
-        : `${carrier.player.name} chuta a bola`
+        ? `${carrier.player.name} strikes it, but the ball is off target`
+        : `${carrier.player.name} strikes the ball`
     );
     // The kicker releases the ball and stays put; nobody else's plan changes.
     current = current.map((p) =>
@@ -476,7 +476,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         const winner = resolveContest([p, occupant], "loose_ball");
         const loser = winner.id === p.id ? occupant : p;
         events.push(
-          `Choque ao cruzar: ${p.player.name} vs ${occupant.player.name} — vence ${winner.player.name}`
+          `Collision crossing paths: ${p.player.name} vs ${occupant.player.name} — ${winner.player.name} wins`
         );
         stopped.add(loser.id);
         intended.set(loser.id, preTickPos.get(loser.id)!);
@@ -505,7 +505,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         const contestants = group.map((gid) => current.find((p) => p.id === gid)!);
         const winner = resolveContest(contestants, "loose_ball");
         events.push(
-          `Disputa por espaço: ${contestants.map((c) => c.player.name).join(" vs ")} — vence ${winner.player.name}`
+          `Contest for space: ${contestants.map((c) => c.player.name).join(" vs ")} — ${winner.player.name} wins`
         );
         for (const c of contestants) {
           if (c.id !== winner.id) {
@@ -526,7 +526,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       const goal = goalCrossedAlong(tickStart, point);
       if (goal) {
         ballPos = point;
-        events.push(goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
+        events.push(goal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
         const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
         snapshots.push({ pawns: frozen, ball: { ...ballPos } });
         return { snapshots, events, goal };
@@ -539,7 +539,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         flight = null;
         currentCarrierId = null;
         ballPos = clampedPoint;
-        events.push("A bola sai de campo");
+        events.push("The ball goes out of play");
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
         continue;
       }
@@ -591,7 +591,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
 
       const rollGoal = goalCrossedAlong(rollFrom, ballPos);
       if (rollGoal) {
-        events.push(rollGoal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
+        events.push(rollGoal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
         const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
         snapshots.push({ pawns: frozen, ball: { ...ballPos } });
         return { snapshots, events, goal: rollGoal };
@@ -602,7 +602,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         roll = null;
         currentCarrierId = null;
         ballPos = clampedRollPos;
-        events.push("A bola sai de campo");
+        events.push("The ball goes out of play");
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
         continue;
       }
@@ -617,7 +617,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         currentCarrierId = winner.id;
         ballPos = { ...winner.pos };
         lastControllingSide = winner.side;
-        events.push(`${winner.player.name} fica com a bola solta`);
+        events.push(`${winner.player.name} gets to the loose ball`);
         if (turnover) {
           snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
           break;
@@ -644,7 +644,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         reactionDecided.add(p.id);
         if (attemptsReaction(p, "press_loose_ball")) {
           chasingIds.add(p.id);
-          events.push(`${p.player.name} reage à bola solta`);
+          events.push(`${p.player.name} reacts to the loose ball`);
         }
       }
     }
@@ -654,7 +654,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
 
   const goal = goalScoredAt(ballPos);
   if (goal) {
-    events.push(goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
+    events.push(goal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
   }
 
   return { snapshots, events, goal };

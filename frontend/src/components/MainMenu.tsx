@@ -10,19 +10,19 @@ export function MainMenu({ onStartHotseat, onStartAi, onStartSolo }: Props) {
   return (
     <div className="menu-wrapper">
       <h1>EagleEye Interactive</h1>
-      <p className="menu-subtitle">Futebol tático por turnos</p>
+      <p className="menu-subtitle">Turn-based tactical soccer</p>
       <div className="menu-options">
         <button type="button" className="menu-button" onClick={onStartHotseat}>
-          Multiplayer local
-          <span className="menu-button-desc">Dois jogadores no mesmo computador, revezando o controle de cada time</span>
+          Local multiplayer
+          <span className="menu-button-desc">Two players on the same computer, taking turns controlling each team</span>
         </button>
         <button type="button" className="menu-button" onClick={onStartAi}>
-          Jogar contra a IA
-          <span className="menu-button-desc">Você controla o time da casa contra um adversário controlado pelo computador</span>
+          Play against AI
+          <span className="menu-button-desc">You control the home team against a computer-controlled opponent</span>
         </button>
         <button type="button" className="menu-button" onClick={onStartSolo}>
-          Modo solo (testes)
-          <span className="menu-button-desc">Só você jogando — o time adversário fica parado, pra testar a mecânica sem interferência</span>
+          Solo mode (testing)
+          <span className="menu-button-desc">Just you playing — the opposing team stays put, for testing the mechanics without interference</span>
         </button>
       </div>
     </div>
