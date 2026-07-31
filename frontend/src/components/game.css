@@ -36,8 +36,7 @@
 .game-wrapper:fullscreen .turn-indicator,
 .game-wrapper:fullscreen .kick-toggle,
 .game-wrapper:fullscreen .events-log,
-.game-wrapper:fullscreen .camera-reset,
-.game-wrapper:fullscreen .result-banner {
+.game-wrapper:fullscreen .camera-reset {
   position: absolute;
   z-index: 5;
   background: transparent;
@@ -87,15 +86,6 @@
 .game-wrapper:fullscreen .camera-reset {
   bottom: 16px;
   left: 16px;
-}
-
-.game-wrapper:fullscreen .result-banner {
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(0, 0, 0, 0.6);
-  padding: 16px 32px;
-  border-radius: 10px;
 }
 
 .game-header {
@@ -161,13 +151,6 @@
 .score {
   color: #1565c0;
   margin: 0 6px;
-}
-
-.result-banner {
-  font-size: 18px;
-  font-weight: 700;
-  color: #2e7d32;
-  margin: 8px 0 16px;
 }
 
 .kick-toggle {

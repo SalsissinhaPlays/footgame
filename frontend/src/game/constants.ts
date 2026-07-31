@@ -21,8 +21,6 @@ export const KICK_RANGE = 24;
 // kick would run out of ticks mid-flight and just stop dead in open space.
 export const BALL_SPEED = 5;
 
-export const TOTAL_TURNS = 12;
-
 // Goal mouth: rows the ball must be in, at column 0 (home goal) or
 // GRID_COLS - 1 (away goal), for a goal to count.
 export const GOAL_ROW_MIN = 17;

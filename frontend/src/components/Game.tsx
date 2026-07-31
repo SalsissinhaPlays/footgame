@@ -8,7 +8,6 @@ import {
   KICK_RANGE,
   OOB_CELLS,
   PAWN_MOVE_BUDGET,
-  TOTAL_TURNS,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
@@ -116,8 +115,6 @@ export function Game({ mode, onExitToMenu }: Props) {
   const [loading, setLoading] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [events, setEvents] = useState<string[]>([]);
-
-  const matchOver = turn > TOTAL_TURNS;
 
   useEffect(() => {
     async function load() {
@@ -251,14 +248,14 @@ export function Game({ mode, onExitToMenu }: Props) {
   const CANCEL_CLICK_EPS = 0.5;
 
   function handlePawnClick(pawn: Pawn) {
-    if (resolving || matchOver) return;
+    if (resolving) return;
     if (pawn.side !== controllingSide) return;
     setKickMode(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
   }
 
   function handleFieldClick(point: Vec2) {
-    if (resolving || matchOver) return;
+    if (resolving) return;
     if (!selectedPawn || reachRadius === null) return;
     if (!inBounds(point)) return;
     if (euclideanDistance(selectedPawn.pos, point) > reachRadius) return;
@@ -355,7 +352,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   async function handleReady() {
-    if (resolving || matchOver) return;
+    if (resolving) return;
     setSelectedId(null);
     setKickMode(false);
 
@@ -391,13 +388,6 @@ export function Game({ mode, onExitToMenu }: Props) {
     return <p>Loading teams...</p>;
   }
 
-  let resultText: string | null = null;
-  if (matchOver) {
-    if (homeScore > awayScore) resultText = `${teams[0]?.name} wins!`;
-    else if (awayScore > homeScore) resultText = `${teams[1]?.name} wins!`;
-    else resultText = "Draw!";
-  }
-
   if (handoff) {
     const nextSideName = controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
     return (
@@ -430,20 +420,16 @@ export function Game({ mode, onExitToMenu }: Props) {
           <span className="score">{awayScore}</span> {teams[1]?.name}
         </h1>
         <div className="game-info">
-          <span>
-            Turn {Math.min(turn, TOTAL_TURNS)} / {TOTAL_TURNS}
-          </span>
-          <button type="button" onClick={handleReady} disabled={resolving || matchOver}>
+          <span>Turn {turn}</span>
+          <button type="button" onClick={handleReady} disabled={resolving}>
             {resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
           </button>
         </div>
       </div>
-      {!matchOver && mode === "hotseat" && (
+      {mode === "hotseat" && (
         <p className={`turn-indicator ${controllingSide}`}>Turn: {controllingSideName}</p>
       )}
-      {matchOver ? (
-        <p className="result-banner">{resultText}</p>
-      ) : mode === "ai" ? (
+      {mode === "ai" ? (
         <p className="hint">
           Click a blue pawn, then a highlighted cell to plan its move. Whoever is standing on the
           ball carries it when they move. Click "Continue" to see what the computer-controlled
@@ -462,7 +448,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           the other team can't see your moves until resolution.
         </p>
       )}
-      {selectedIsCarrier && !matchOver && (
+      {selectedIsCarrier && (
         <div className="kick-toggle">
           <span>Pawn with the ball — choose an action:</span>
           <button
