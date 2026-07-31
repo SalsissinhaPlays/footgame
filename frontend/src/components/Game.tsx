@@ -29,10 +29,6 @@ function nothingMoved(pawns: Pawn[], ballPos: Vec2, prevPawns: Pawn[], prevBallP
   return pawns.every((p, i) => p.pos.x === prevPawns[i].pos.x && p.pos.y === prevPawns[i].pos.y);
 }
 
-function chebyshevDistance(a: Vec2, b: Vec2): number {
-  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-}
-
 function euclideanDistance(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -79,7 +75,7 @@ const ZOOM_MAX = 2.5;
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<MatchScene | null>(null);
-  const handlersRef = useRef<MatchCallbacks>({ onPawnClick: () => {}, onCellClick: () => {} });
+  const handlersRef = useRef<MatchCallbacks>({ onPawnClick: () => {}, onFieldClick: () => {} });
   const rotateState = useRef<{
     active: boolean;
     startX: number;
@@ -186,33 +182,16 @@ export function Game({ mode, onExitToMenu }: Props) {
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
   const selectedIsCarrier = !!selectedPawn && isCarrier(selectedPawn);
 
-  const reachableCells = (() => {
-    if (!selectedPawn) return new Set<string>();
-    const isKick = kickMode && selectedIsCarrier;
-    // A pawn's resting position is no longer guaranteed to land exactly on a
-    // cell (the engine walks it there continuously) — cell keys themselves
-    // are always integers, so the loop has to anchor on a rounded origin and
-    // then measure true distance from the pawn's real (possibly fractional)
-    // position, rather than offsetting directly from pos.x/y.
-    const originX = Math.round(selectedPawn.pos.x);
-    const originY = Math.round(selectedPawn.pos.y);
-    const range = isKick ? KICK_RANGE : Math.ceil(PAWN_MOVE_BUDGET);
-    const cells = new Set<string>();
-    for (let dx = -range; dx <= range; dx++) {
-      for (let dy = -range; dy <= range; dy++) {
-        const cell = { x: originX + dx, y: originY + dy };
-        if (!inBounds(cell)) continue;
-        // Kick range keeps its existing Chebyshev metric (unchanged, still
-        // matches resolve.ts's kick-clamp math); move range switches to
-        // Euclidean, matching the engine's real any-direction movement.
-        const within = isKick
-          ? chebyshevDistance(selectedPawn.pos, cell) <= range
-          : euclideanDistance(selectedPawn.pos, cell) <= PAWN_MOVE_BUDGET;
-        if (within) cells.add(`${cell.x},${cell.y}`);
-      }
-    }
-    return cells;
-  })();
+  // How far (world units) the selected pawn can move/kick this turn — the
+  // radius the reach-circle overlay draws, and the same budget a click has
+  // to fall within to register. Both move and kick are plain Euclidean
+  // circles now that targeting is continuous, not tied to grid cells.
+  const reachRadius = selectedPawn ? (kickMode && selectedIsCarrier ? KICK_RANGE : PAWN_MOVE_BUDGET) : null;
+
+  // Clicking within this distance of the selected pawn's own position cancels
+  // its planned move instead of setting a new one — the continuous
+  // equivalent of "clicking the cell you're already standing on."
+  const CANCEL_CLICK_EPS = 0.5;
 
   function handlePawnClick(pawn: Pawn) {
     if (resolving || matchOver) return;
@@ -221,26 +200,24 @@ export function Game({ mode, onExitToMenu }: Props) {
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
   }
 
-  function handleCellClick(cell: Vec2) {
+  function handleFieldClick(point: Vec2) {
     if (resolving || matchOver) return;
-    if (!selectedPawn) return;
-    if (!reachableCells.has(`${cell.x},${cell.y}`)) return;
+    if (!selectedPawn || reachRadius === null) return;
+    if (!inBounds(point)) return;
+    if (euclideanDistance(selectedPawn.pos, point) > reachRadius) return;
 
     if (kickMode && selectedIsCarrier) {
       setPawns((prev) =>
         prev.map((p) =>
-          p.id === selectedPawn.id ? { ...p, plannedKick: cell, plannedPos: null } : p
+          p.id === selectedPawn.id ? { ...p, plannedKick: point, plannedPos: null } : p
         )
       );
     } else {
+      const cancel = euclideanDistance(selectedPawn.pos, point) < CANCEL_CLICK_EPS;
       setPawns((prev) =>
         prev.map((p) =>
           p.id === selectedPawn.id
-            ? {
-                ...p,
-                plannedPos: p.pos.x === cell.x && p.pos.y === cell.y ? null : cell,
-                plannedKick: null,
-              }
+            ? { ...p, plannedPos: cancel ? null : point, plannedKick: null }
             : p
         )
       );
@@ -257,7 +234,7 @@ export function Game({ mode, onExitToMenu }: Props) {
         const pawn = pawns.find((p) => p.id === pawnId);
         if (pawn) handlePawnClick(pawn);
       },
-      onCellClick: handleCellClick,
+      onFieldClick: handleFieldClick,
     };
   });
 
@@ -265,7 +242,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     sceneRef.current = scene;
     scene.setCallbacks({
       onPawnClick: (pawnId) => handlersRef.current.onPawnClick(pawnId),
-      onCellClick: (cell) => handlersRef.current.onCellClick(cell),
+      onFieldClick: (point) => handlersRef.current.onFieldClick(point),
     });
     setSceneReady(true);
   }
@@ -275,7 +252,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       pawns,
       ball,
       selectedId,
-      reachableCells,
+      reachRadius,
       kickMode,
       controllingSide,
       camera,

@@ -164,7 +164,7 @@ function closestPointOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
  * straight past a defender sitting exactly on the line without ever coming
  * within range of it.
  */
-function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+export function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
   return distance(p, closestPointOnSegment(p, a, b));
 }
 
@@ -222,7 +222,7 @@ interface FlightStart {
 }
 
 function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
-  const dist = Math.max(Math.abs(rawTarget.x - carrier.pos.x), Math.abs(rawTarget.y - carrier.pos.y));
+  const dist = distance(carrier.pos, rawTarget);
   const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
   const aim: Vec2 = {
     x: carrier.pos.x + (rawTarget.x - carrier.pos.x) * clampFraction,

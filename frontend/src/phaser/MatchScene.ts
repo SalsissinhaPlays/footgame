@@ -1,11 +1,11 @@
 import Phaser from "phaser";
 import { landingSpread } from "../game/aim";
 import {
+  CHECKER_CELL_SIZE,
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
   GRID_ROWS,
-  OOB_CELLS,
 } from "../game/constants";
 import {
   createProjector,
@@ -23,7 +23,8 @@ export interface MatchSyncState {
   pawns: Pawn[];
   ball: Ball;
   selectedId: string | null;
-  reachableCells: Set<string>;
+  /** How far (world units) the selected pawn can move/kick this turn, or null if nothing's selected. */
+  reachRadius: number | null;
   kickMode: boolean;
   controllingSide: Side;
   camera: { zoom: number; rotation: number; tilt: number };
@@ -31,12 +32,17 @@ export interface MatchSyncState {
 
 export interface MatchCallbacks {
   onPawnClick: (pawnId: string) => void;
-  onCellClick: (cell: Vec2) => void;
+  onFieldClick: (point: Vec2) => void;
 }
 
 const SIX_YARD_DEPTH = 1.2;
 const PENALTY_DEPTH = 2.6;
 const PENALTY_PAD = 1.5;
+// How far into the pitch the reach-highlight's "shot zone" tint extends from
+// the goal line, and the radius of the "pass zone" halo drawn around each
+// in-range teammate — purely visual, not gameplay radii.
+const GOAL_TINT_DEPTH = 3;
+const PASS_HALO_RADIUS = 2.2;
 const SPRITE_HEIGHT = 90;
 // The new pixel-art sprite set is narrower than the old set (~0.40-0.48
 // width:height across the three files, vs. the old ~0.55) — this average
@@ -62,7 +68,7 @@ export class MatchScene extends Phaser.Scene {
   private fieldGfx!: Phaser.GameObjects.Graphics;
   private linesGfx!: Phaser.GameObjects.Graphics;
   private cellsGfx!: Phaser.GameObjects.Graphics;
-  private cellZones = new Map<string, Phaser.GameObjects.Zone>();
+  private fieldZone!: Phaser.GameObjects.Zone;
   private overlayGfx!: Phaser.GameObjects.Graphics;
   private ballShadow!: Phaser.GameObjects.Ellipse;
   private ballSprite!: Phaser.GameObjects.Image;
@@ -115,7 +121,20 @@ export class MatchScene extends Phaser.Scene {
       .setDepth(2000)
       .setVisible(false);
 
-    this.buildCellZones();
+    // A single static hit zone covering the whole fixed-size world, rather
+    // than one Zone per grid cell — its own geometry is camera-independent
+    // (unlike the old per-cell zones, it never needs rebuilding on rotation),
+    // since the click's world position is recovered afterward via the
+    // current projector's fromIso. Pawns still get click priority over it
+    // via depth (set below in updatePawns), same as the old per-cell zones.
+    this.fieldZone = this.add
+      .zone(VIEW_W / 2, VIEW_H / 2, VIEW_W, VIEW_H)
+      .setInteractive()
+      .setDepth(-1);
+    this.fieldZone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      const point = this.projector.fromIso(pointer.worldX, pointer.worldY);
+      this.callbacks?.onFieldClick(point);
+    });
 
     this.handleResize(this.scale.gameSize);
     this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize, this);
@@ -149,11 +168,10 @@ export class MatchScene extends Phaser.Scene {
       this.lastRotation = state.camera.rotation;
       this.lastTilt = state.camera.tilt;
       this.redrawField();
-      this.rebuildCellZones();
     }
 
     this.cameras.main.setZoom(this.fitZoom * state.camera.zoom);
-    this.updateCellHighlights();
+    this.updateReachHighlight();
     this.updatePawns();
     this.updateBall();
     this.updateOverlay();
@@ -196,29 +214,35 @@ export class MatchScene extends Phaser.Scene {
     const lg = this.linesGfx;
     lg.clear();
 
-    // Checkerboard fill (alternating per cell, not per row) plus a scatter of
-    // small, fixed-position speckles per cell to fake grass-blade texture —
-    // both computed directly from this cell's own already-rotated corner
+    // Checkerboard fill (alternating per tile, not per row) plus a scatter of
+    // small, fixed-position speckles per tile to fake grass-blade texture —
+    // both computed directly from this tile's own already-rotated corner
     // points (via bilinear), the same ones the checker/outline/lines below
     // use, so this can never drift out of sync with the rest of the field
-    // under rotation (unlike the earlier masked-texture attempt).
-    const SPECKS_PER_CELL = 5;
-    for (let row = 0; row < GRID_ROWS; row++) {
-      for (let col = 0; col < GRID_COLS; col++) {
-        const cell = [
-          p.toIso(col, row),
-          p.toIso(col + 1, row),
-          p.toIso(col + 1, row + 1),
-          p.toIso(col, row + 1),
+    // under rotation (unlike the earlier masked-texture attempt). Tiles are
+    // CHECKER_CELL_SIZE world units per side, decoupled from gameplay scale
+    // so draw cost stays bounded regardless of pitch size.
+    const SPECKS_PER_TILE = 5;
+    const tileCols = GRID_COLS / CHECKER_CELL_SIZE;
+    const tileRows = GRID_ROWS / CHECKER_CELL_SIZE;
+    for (let row = 0; row < tileRows; row++) {
+      for (let col = 0; col < tileCols; col++) {
+        const x0 = col * CHECKER_CELL_SIZE;
+        const y0 = row * CHECKER_CELL_SIZE;
+        const tile = [
+          p.toIso(x0, y0),
+          p.toIso(x0 + CHECKER_CELL_SIZE, y0),
+          p.toIso(x0 + CHECKER_CELL_SIZE, y0 + CHECKER_CELL_SIZE),
+          p.toIso(x0, y0 + CHECKER_CELL_SIZE),
         ];
         lg.fillStyle((row + col) % 2 === 0 ? 0x3b8a41 : 0x327a37, 1);
-        fillPoly(lg, cell);
+        fillPoly(lg, tile);
 
-        for (let i = 0; i < SPECKS_PER_CELL; i++) {
+        for (let i = 0; i < SPECKS_PER_TILE; i++) {
           const seed = row * 1000 + col * 17 + i * 3.7;
           const u = seededRandom(seed);
           const v = seededRandom(seed + 0.5);
-          const pt = bilinear(cell, u, v);
+          const pt = bilinear(tile, u, v);
           const darker = seededRandom(seed + 1.5) > 0.5;
           const radius = 1.2 + seededRandom(seed + 2) * 1.6;
           lg.fillStyle(darker ? 0x0d2410 : 0x5ca865, 0.1);
@@ -294,70 +318,70 @@ export class MatchScene extends Phaser.Scene {
     g.lineBetween(frontTopRise.x, frontTopRise.y, frontBottomRise.x, frontBottomRise.y);
   }
 
-  // --- Interactive grid cells ---
+  // --- Reach-area highlight ---
 
-  private buildCellZones() {
-    for (let x = -OOB_CELLS; x < GRID_COLS + OOB_CELLS; x++) {
-      for (let y = -OOB_CELLS; y < GRID_ROWS + OOB_CELLS; y++) {
-        const zone = this.add.zone(0, 0, 1, 1).setInteractive();
-        zone.on("pointerdown", () => this.callbacks?.onCellClick({ x, y }));
-        this.cellZones.set(`${x},${y}`, zone);
-      }
-    }
-    this.rebuildCellZones();
-  }
-
-  private rebuildCellZones() {
-    const p = this.projector;
-    for (const [key, zone] of this.cellZones) {
-      const [xs, ys] = key.split(",");
-      const x = Number(xs);
-      const y = Number(ys);
-      const corners = [p.toIso(x, y), p.toIso(x + 1, y), p.toIso(x + 1, y + 1), p.toIso(x, y + 1)];
-      const poly = new Phaser.Geom.Polygon(corners.flatMap((c) => [c.x, c.y]));
-      const bounds = Phaser.Geom.Polygon.GetAABB(poly);
-      zone.setPosition(0, 0);
-      zone.setSize(1, 1);
-      zone.input!.hitArea = poly;
-      zone.input!.hitAreaCallback = Phaser.Geom.Polygon.Contains;
-      zone.setData("bounds", bounds);
-    }
-  }
-
-  private updateCellHighlights() {
+  /**
+   * Replaces the old per-cell highlight grid: a single filled circle around
+   * the selected pawn at its real move/kick reach, plus (in kick mode) the
+   * opponent's goal mouth tinted red when it's within reach and a green
+   * halo around each in-range teammate — these are already well-defined,
+   * fixed-shape regions, so tinting them directly reads better than the old
+   * per-cell approach did once cells stopped being the unit of precision.
+   */
+  private updateReachHighlight() {
     const g = this.cellsGfx;
     g.clear();
     if (!this.state) return;
-    const { reachableCells, kickMode, pawns, selectedId } = this.state;
+    const { reachRadius, kickMode, pawns, selectedId } = this.state;
+    if (reachRadius === null || !selectedId) return;
+    const selectedPawn = pawns.find((pw) => pw.id === selectedId);
+    if (!selectedPawn) return;
     const p = this.projector;
-    // In kick mode, tint each reachable cell by what kicking there would
-    // actually mean — a shot at goal, a pass to a teammate, or just
-    // clearing the ball — computed the same way the aim-ring label is, so
-    // the intent is visible before you even commit to a target.
-    const selectedPawn = kickMode ? pawns.find((pw) => pw.id === selectedId) ?? null : null;
-    const COLORS: Record<"shot" | "pass" | "clear", { fill: number; stroke: number }> = {
-      shot: { fill: 0xe53935, stroke: 0xff6659 },
-      pass: { fill: 0x43a047, stroke: 0x76d275 },
-      clear: { fill: 0xff8c00, stroke: 0xffa028 },
-    };
-    for (const key of reachableCells) {
-      const [xs, ys] = key.split(",");
-      const x = Number(xs);
-      const y = Number(ys);
-      const corners = [p.toIso(x, y), p.toIso(x + 1, y), p.toIso(x + 1, y + 1), p.toIso(x, y + 1)];
-      if (selectedPawn) {
-        const intent = classifyKickTarget({ x, y }, selectedPawn.side, selectedPawn.id, pawns);
-        const { fill, stroke } = COLORS[intent];
-        g.fillStyle(fill, 0.35);
-        fillPoly(g, corners);
-        g.lineStyle(1.5, stroke, 0.9);
-        strokePoly(g, corners, true);
-      } else {
-        g.fillStyle(0xffff64, 0.3);
-        fillPoly(g, corners);
-        g.lineStyle(1.5, 0xffff78, 0.9);
-        strokePoly(g, corners, true);
-      }
+    const cx = selectedPawn.pos.x + 0.5;
+    const cy = selectedPawn.pos.y + 0.5;
+    const reachPts = isoCircle(p, cx, cy, reachRadius);
+
+    if (!kickMode) {
+      g.fillStyle(0xffff64, 0.28);
+      fillPoly(g, reachPts);
+      g.lineStyle(1.5, 0xffff78, 0.9);
+      strokePoly(g, reachPts, true);
+      return;
+    }
+
+    // Base "clear" tint over the whole reach circle; shot/pass zones layer on top.
+    g.fillStyle(0xff8c00, 0.22);
+    fillPoly(g, reachPts);
+    g.lineStyle(1.5, 0xffa028, 0.9);
+    strokePoly(g, reachPts, true);
+
+    const goalLineX = selectedPawn.side === "home" ? GRID_COLS : 0;
+    const goalYTop = GOAL_ROW_MIN;
+    const goalYBottom = GOAL_ROW_MAX + 1;
+    const closestGoalY = Math.max(goalYTop, Math.min(goalYBottom, selectedPawn.pos.y));
+    const distToGoal = Math.hypot(goalLineX - selectedPawn.pos.x, closestGoalY - selectedPawn.pos.y);
+    if (distToGoal <= reachRadius) {
+      const depth = selectedPawn.side === "home" ? -GOAL_TINT_DEPTH : GOAL_TINT_DEPTH;
+      const shotZone = [
+        p.toIso(goalLineX, goalYTop),
+        p.toIso(goalLineX + depth, goalYTop),
+        p.toIso(goalLineX + depth, goalYBottom),
+        p.toIso(goalLineX, goalYBottom),
+      ];
+      g.fillStyle(0xe53935, 0.32);
+      fillPoly(g, shotZone);
+      g.lineStyle(1.5, 0xff6659, 0.9);
+      strokePoly(g, shotZone, true);
+    }
+
+    for (const mate of pawns) {
+      if (mate.side !== selectedPawn.side || mate.id === selectedPawn.id) continue;
+      if (Math.hypot(mate.pos.x - selectedPawn.pos.x, mate.pos.y - selectedPawn.pos.y) > reachRadius) continue;
+      const haloPts = isoCircle(p, mate.pos.x + 0.5, mate.pos.y + 0.5, PASS_HALO_RADIUS);
+      g.fillStyle(0x43a047, 0.4);
+      fillPoly(g, haloPts);
+      g.lineStyle(1.5, 0x76d275, 0.9);
+      strokePoly(g, haloPts, true);
     }
   }
 
@@ -563,6 +587,16 @@ export class MatchScene extends Phaser.Scene {
     }
     if (!labelShown) this.kickLabelText.setVisible(false);
   }
+}
+
+/** World-space circle (center cx,cy, radius r) sampled and projected through `p` — renders as an ellipse under tilt/rotation, same technique used for the center circle and aim-ring. */
+function isoCircle(p: Projector, cx: number, cy: number, r: number, segments = 32): Vec2[] {
+  const pts: Vec2[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const angle = (i / segments) * Math.PI * 2;
+    pts.push(p.toIso(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r));
+  }
+  return pts;
 }
 
 function fillPoly(g: Phaser.GameObjects.Graphics, points: Vec2[]) {

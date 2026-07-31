@@ -22,8 +22,10 @@ const PADDING = 90;
 // Extra strip rendered beyond the pitch on all four sides, and how far the
 // goal net pocket pokes out past the goal line within that strip. Scoring
 // requires the ball to actually reach this out-of-bounds net area now.
-export const OOB_MARGIN = 1.4;
-export const GOAL_NET_DEPTH = 1.4;
+// Scaled proportionally with OOB_CELLS (the walkable apron) so the rendered
+// strip stays just beyond where a pawn can actually stand.
+export const OOB_MARGIN = 5.6;
+export const GOAL_NET_DEPTH = 5.6;
 
 export interface Point {
   x: number;
@@ -88,6 +90,8 @@ export function pointsAttr(points: Point[]): string {
 
 export interface Projector {
   toIso(gx: number, gy: number): Point;
+  /** Inverse of toIso: maps a screen-space point back to world (grid) coordinates. */
+  fromIso(sx: number, sy: number): Point;
   cellCorners(gx: number, gy: number): Point[];
   isoCirclePath(cx: number, cy: number, r: number, segments?: number): string;
 }
@@ -96,10 +100,27 @@ export interface Projector {
 export function createProjector(rotationDeg: number, tiltDeg: number): Projector {
   const rot = (rotationDeg * Math.PI) / 180;
   const tilt = (tiltDeg * Math.PI) / 180;
+  const heightScale = Math.tan(tilt);
 
   function toIso(gx: number, gy: number): Point {
     const p = projectAt(gx, gy, rot, tilt);
     return { x: p.x + OFFSET_X, y: p.y + OFFSET_Y };
+  }
+
+  // Algebraic inverse of projectAt + the OFFSET_X/Y translation: undo the
+  // offset, then the (rx - rz)/(rx + rz) shear-and-scale, then the rotation.
+  // tiltRad is bounded away from 0/90 degrees by TILT_MIN/TILT_MAX, so
+  // heightScale is never 0 and this never divides by zero.
+  function fromIso(sx: number, sy: number): Point {
+    const rawX = sx - OFFSET_X;
+    const rawY = sy - OFFSET_Y;
+    const a = rawX / (TILE_W / 2);
+    const b = rawY / ((TILE_W / 2) * heightScale);
+    const rx = (a + b) / 2;
+    const rz = (b - a) / 2;
+    const wx = rx * Math.cos(rot) + rz * Math.sin(rot);
+    const wz = -rx * Math.sin(rot) + rz * Math.cos(rot);
+    return { x: wx + CENTER_X, y: wz + CENTER_Z };
   }
 
   function cellCorners(gx: number, gy: number): Point[] {
@@ -115,5 +136,5 @@ export function createProjector(rotationDeg: number, tiltDeg: number): Projector
     return `M ${pts.map((p) => `${p.x},${p.y}`).join(" L ")} Z`;
   }
 
-  return { toIso, cellCorners, isoCirclePath };
+  return { toIso, fromIso, cellCorners, isoCirclePath };
 }

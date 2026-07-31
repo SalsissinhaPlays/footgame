@@ -1,4 +1,5 @@
 import {
+  CAPTURE_RADIUS,
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
@@ -7,11 +8,11 @@ import {
   OOB_CELLS,
   PAWN_MOVE_BUDGET,
 } from "./constants";
-import { lineCells } from "./resolve";
+import { distanceToSegment } from "./resolve";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
 
 function dist(a: Vec2, b: Vec2): number {
-  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function inBounds(pos: Vec2): boolean {
@@ -37,20 +38,24 @@ function ownGoal(side: Side): Vec2 {
   return { x: side === "home" ? 0 : GRID_COLS - 1, y: Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2) };
 }
 
-/** Whether any of `obstacles` sits on the straight line between `from` and `to`. */
+/**
+ * Whether any of `obstacles` sits close enough to the straight line between
+ * `from` and `to` to plausibly reach it — the same CAPTURE_RADIUS the
+ * resolution engine itself uses to decide if a defender can intercept a
+ * flight, checked via distance-from-segment rather than exact-cell
+ * equality. Exact equality against a rounded lineCells path was a latent bug
+ * once pawn positions went continuous: a pawn essentially never sits on an
+ * exact integer point after its first move, so it silently never blocked.
+ */
 function hasClearLane(from: Vec2, to: Vec2, obstacles: Pawn[]): boolean {
-  const path = lineCells(from, to);
-  return !path.some((cell) => obstacles.some((o) => o.pos.x === cell.x && o.pos.y === cell.y));
+  return !obstacles.some((o) => distanceToSegment(o.pos, from, to) <= CAPTURE_RADIUS);
 }
 
 /**
  * Destination up to `maxDistance` (real, Euclidean) away from `pos`, heading
- * straight toward `dest`, clamped to the field. Euclidean rather than
- * Chebyshev because the engine now actually walks a pawn there at a real
- * distance-per-tick pace in any direction — a Chebyshev clamp would let the
- * AI plan diagonal destinations it can't really reach in one turn. Still
- * rounds to a whole cell: AI planning stays cell-granular, only the
- * resolution engine's own movement is continuous.
+ * straight toward `dest`, clamped to the field. The engine walks a pawn
+ * there at a real distance-per-tick pace in any direction, so the AI plans
+ * on the same continuous terms — no rounding to a whole cell.
  */
 function moveToward(pos: Vec2, dest: Vec2, maxDistance: number): Vec2 {
   const dx = dest.x - pos.x;
@@ -58,10 +63,7 @@ function moveToward(pos: Vec2, dest: Vec2, maxDistance: number): Vec2 {
   const distance = Math.hypot(dx, dy);
   if (distance === 0) return { ...pos };
   const factor = Math.min(1, maxDistance / distance);
-  const target = {
-    x: Math.round(pos.x + dx * factor),
-    y: Math.round(pos.y + dy * factor),
-  };
+  const target = { x: pos.x + dx * factor, y: pos.y + dy * factor };
   return inBounds(target) ? target : pos;
 }
 

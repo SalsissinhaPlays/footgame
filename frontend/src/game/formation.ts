@@ -2,12 +2,12 @@ import { GRID_COLS } from "./constants";
 import type { Pawn, PlayerDTO, Side, Vec2 } from "./types";
 
 const HOME_SLOTS: Record<string, Vec2> = {
-  GK: { x: 1, y: 6 },
-  DEF: { x: 3, y: 3 },
-  DEF2: { x: 3, y: 9 },
-  MID: { x: 6, y: 2 },
-  MID2: { x: 6, y: 10 },
-  FWD: { x: 6, y: 6 },
+  GK: { x: 4, y: 20 },
+  DEF: { x: 11, y: 10 },
+  DEF2: { x: 11, y: 30 },
+  MID: { x: 22, y: 7 },
+  MID2: { x: 22, y: 33 },
+  FWD: { x: 22, y: 20 },
 };
 
 const SLOT_ORDER = ["GK", "DEF", "DEF2", "MID", "MID2", "FWD"];
