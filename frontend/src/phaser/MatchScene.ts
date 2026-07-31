@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { landingSpread } from "../game/aim";
 import {
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
@@ -490,6 +491,28 @@ export class MatchScene extends Phaser.Scene {
         g.lineBetween(base.x, base.y, kick.x, kick.y);
         g.fillStyle(0xef6c00, 1);
         g.fillCircle(kick.x, kick.y, 7);
+
+        // Aim-spread preview: a ring around the target sized by how precise
+        // this exact kick actually is (distance + the kicker's skill), using
+        // the same formula the resolution engine samples the real landing
+        // point from — a true preview of risk, not a separate guess. A
+        // small ring means a safe, reliable kick; a large one means it could
+        // land well off where you clicked.
+        const kickDist = Math.hypot(pawn.plannedKick.x - pawn.pos.x, pawn.plannedKick.y - pawn.pos.y);
+        const sigma = landingSpread(kickDist, pawn.player.skill);
+        const spreadPts: Vec2[] = [];
+        const RING_SEGMENTS = 28;
+        for (let i = 0; i <= RING_SEGMENTS; i++) {
+          const angle = (i / RING_SEGMENTS) * Math.PI * 2;
+          spreadPts.push(
+            p.toIso(
+              pawn.plannedKick.x + 0.5 + Math.cos(angle) * sigma,
+              pawn.plannedKick.y + 0.5 + Math.sin(angle) * sigma
+            )
+          );
+        }
+        g.lineStyle(1.5, 0xef6c00, 0.5);
+        strokePoly(g, spreadPts, true);
       }
     }
   }
