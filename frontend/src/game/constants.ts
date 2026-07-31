@@ -118,3 +118,14 @@ export const MAN_MARK_PULL_WEIGHT = 0.7;
 // speed it's left with while inside that radius.
 export const PRESSURE_RADIUS = 2.5;
 export const PRESSURE_SLOW_FACTOR = 0.6;
+
+// Sprint: a cooldown-gated skill rather than a freely-repeatable stance —
+// there's no stamina-drain/fatigue resource to draw a numeric cost from yet,
+// so the cooldown lockout itself is the physical cost. A 50% reach boost is
+// enough to plausibly win a foot race without being an obviously-correct
+// pick every turn; a 3-turn lockout is steep enough that spamming it every
+// turn isn't viable but short enough to reuse within the same attacking move
+// if timed well. Both are starting points, expected to move together in
+// playtesting.
+export const SPRINT_SPEED_MULTIPLIER = 1.5;
+export const SPRINT_COOLDOWN_TURNS = 3;

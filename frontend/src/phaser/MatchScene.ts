@@ -473,7 +473,9 @@ export class MatchScene extends Phaser.Scene {
     for (const pawn of pawns) {
       seen.add(pawn.id);
       const visible =
-        pawn.side === controllingSide ? pawn : { ...pawn, plannedPos: null, plannedKick: null, stance: null };
+        pawn.side === controllingSide
+          ? pawn
+          : { ...pawn, plannedPos: null, plannedKick: null, stance: null, plannedSprint: false };
       let visual = this.pawnVisuals.get(pawn.id);
       if (!visual) {
         visual = this.createPawnVisual(pawn);

@@ -36,6 +36,8 @@ export function buildFormation(players: PlayerDTO[], side: Side): Pawn[] {
       plannedPos: null,
       plannedKick: null,
       stance: null,
+      plannedSprint: false,
+      sprintCooldown: 0,
     };
   });
 }

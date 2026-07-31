@@ -43,6 +43,16 @@ export interface Pawn {
   /** Set instead of plannedPos when this pawn (must be the ball carrier) kicks/passes this turn. */
   plannedKick: Vec2 | null;
   stance: Stance | null;
+  /** This turn's choice to sprint — turn-scoped like plannedPos/plannedKick/stance. */
+  plannedSprint: boolean;
+  /**
+   * Turns remaining before sprint can be used again (0 = available). Unlike
+   * everything else on Pawn, this is NOT turn-scoped — it persists and
+   * decrements across turn boundaries (see Game.tsx's post-turn bookkeeping),
+   * since sprint is a cooldown-gated skill rather than a freely-repeatable
+   * per-turn order.
+   */
+  sprintCooldown: number;
 }
 
 export interface Ball {

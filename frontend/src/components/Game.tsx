@@ -8,6 +8,8 @@ import {
   KICK_RANGE,
   OOB_CELLS,
   PAWN_MOVE_BUDGET,
+  SPRINT_COOLDOWN_TURNS,
+  SPRINT_SPEED_MULTIPLIER,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
@@ -243,7 +245,8 @@ export function Game({ mode, onExitToMenu }: Props) {
   // radius the reach-circle overlay draws, and the same budget a click has
   // to fall within to register. Both move and kick are plain Euclidean
   // circles now that targeting is continuous, not tied to grid cells.
-  const reachRadius = selectedPawn ? (kickMode && selectedIsCarrier ? KICK_RANGE : PAWN_MOVE_BUDGET) : null;
+  const moveBudget = selectedPawn?.plannedSprint ? PAWN_MOVE_BUDGET * SPRINT_SPEED_MULTIPLIER : PAWN_MOVE_BUDGET;
+  const reachRadius = selectedPawn ? (kickMode && selectedIsCarrier ? KICK_RANGE : moveBudget) : null;
 
   // Clicking within this distance of the selected pawn's own position cancels
   // its planned move instead of setting a new one — the continuous
@@ -300,6 +303,15 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (!selectedPawn) return;
     setPawns((prev) => prev.map((p) => (p.id === selectedPawn.id ? { ...p, stance } : p)));
     setPickingMarkTarget(false);
+  }
+
+  /** Toggles the selected pawn's sprint order for this turn. Turning it off is always allowed; turning it on requires the cooldown to be clear. */
+  function handleToggleSprint() {
+    if (!selectedPawn) return;
+    if (!selectedPawn.plannedSprint && selectedPawn.sprintCooldown > 0) return;
+    setPawns((prev) =>
+      prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSprint: !p.plannedSprint } : p))
+    );
   }
 
   // Keep the Phaser-facing callbacks stable (set once when the scene mounts)
@@ -362,8 +374,19 @@ export function Game({ mode, onExitToMenu }: Props) {
     // A stance is a standing order for this turn only — resolve.ts relies on
     // it staying put across every tick of the turn it was set for (so a
     // man-marking pawn keeps re-aiming), but it shouldn't silently carry
-    // over once planning for the NEXT turn begins.
-    setPawns((prev) => prev.map((p) => (p.stance ? { ...p, stance: null } : p)));
+    // over once planning for the NEXT turn begins. Sprint's cooldown is the
+    // opposite: it's the one thing that DOES need to persist and evolve
+    // turn-over-turn, computed here (not resolve.ts, which has no notion of
+    // "next turn") in the same pass — a pawn that just sprinted resets to a
+    // full cooldown, everyone else's existing cooldown ticks down by one.
+    setPawns((prev) =>
+      prev.map((p) => ({
+        ...p,
+        stance: p.stance ? null : p.stance,
+        plannedSprint: false,
+        sprintCooldown: p.plannedSprint ? SPRINT_COOLDOWN_TURNS : Math.max(0, p.sprintCooldown - 1),
+      }))
+    );
 
     if (goal) {
       if (goal === "home") setHomeScore((s) => s + 1);
@@ -534,6 +557,21 @@ export function Game({ mode, onExitToMenu }: Props) {
             onClick={() => setPickingMarkTarget(true)}
           >
             Man-mark
+          </button>
+        </div>
+      )}
+      {selectedPawn && (
+        <div className="kick-toggle">
+          <span>Sprint — covers more ground this turn, then cools down:</span>
+          <button
+            type="button"
+            className={selectedPawn.plannedSprint ? "active" : ""}
+            disabled={!selectedPawn.plannedSprint && selectedPawn.sprintCooldown > 0}
+            onClick={handleToggleSprint}
+          >
+            {selectedPawn.sprintCooldown > 0 && !selectedPawn.plannedSprint
+              ? `Sprint (${selectedPawn.sprintCooldown})`
+              : "Sprint"}
           </button>
         </div>
       )}

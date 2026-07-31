@@ -20,6 +20,7 @@ import {
   ROLL_FRICTION,
   ROLL_START_SPEED,
   ROLL_STOP_EPS,
+  SPRINT_SPEED_MULTIPLIER,
   TACKLE_RADIUS,
 } from "./constants";
 import { sampleLanding } from "./aim";
@@ -448,7 +449,13 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     // have since moved out of the way.
     const candidates = new Map(
       current.map((p) => {
-        const speed = isPressured(p) ? PAWN_SPEED_PER_TICK * PRESSURE_SLOW_FACTOR : PAWN_SPEED_PER_TICK;
+        const base = isPressured(p) ? PAWN_SPEED_PER_TICK * PRESSURE_SLOW_FACTOR : PAWN_SPEED_PER_TICK;
+        // Stacks multiplicatively with pressure rather than needing special
+        // casing — sprinting through an opponent's pressure nets to
+        // PRESSURE_SLOW_FACTOR * SPRINT_SPEED_MULTIPLIER (a mild net
+        // slowdown at the current tuning), which reads correctly as
+        // "sprinting barely overcomes someone right on top of you."
+        const speed = p.plannedSprint ? base * SPRINT_SPEED_MULTIPLIER : base;
         return [p.id, candidateHeadings(p.pos, destinations.get(p.id)!, speed)];
       })
     );
