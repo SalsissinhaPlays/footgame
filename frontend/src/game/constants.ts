@@ -66,3 +66,8 @@ export const PAWN_COLLISION_RADIUS = 0.9;
 // Total real-distance reach for a turn's move, used wherever planning
 // (human click or AI) decides which destinations are reachable this turn.
 export const PAWN_MOVE_BUDGET = MOVE_RANGE * PAWN_SPEED_PER_TICK;
+
+// How close an opponent has to get to a dribbling ball carrier before they
+// can attempt a tackle — a bit more generous than PAWN_COLLISION_RADIUS
+// since this represents a boot reaching in, not the pawns' bodies overlapping.
+export const TACKLE_RADIUS = 1.1;

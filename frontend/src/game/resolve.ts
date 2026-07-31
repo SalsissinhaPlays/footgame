@@ -17,6 +17,7 @@ import {
   ROLL_FRICTION,
   ROLL_START_SPEED,
   ROLL_STOP_EPS,
+  TACKLE_RADIUS,
 } from "./constants";
 import { sampleLanding } from "./aim";
 import { resolveContest, resolveContestDetailed } from "./contest";
@@ -381,6 +382,12 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   // stays nearby — a flicker-free decision, not a live re-evaluation).
   const chasingIds = new Set<string>();
   const reactionDecided = new Set<string>();
+  // Tracks tackle attempts against the CURRENT dribble specifically — reset
+  // whenever the ball changes hands, so a defender who already failed
+  // doesn't get a free repeated roll every tick just for staying close, but
+  // a new carrier (or a fresh challenger) always gets a real read.
+  let tackleCarrierId: string | null = currentCarrierId;
+  const tackleAttempted = new Set<string>();
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
     // Chasers re-aim at the ball's last known position before this tick's
@@ -627,8 +634,60 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         currentCarrierId = null;
       }
     } else if (currentCarrierId) {
+      if (tackleCarrierId !== currentCarrierId) {
+        tackleCarrierId = currentCarrierId;
+        tackleAttempted.clear();
+      }
       const holder = current.find((p) => p.id === currentCarrierId);
-      if (holder) ballPos = { ...holder.pos };
+      if (holder) {
+        ballPos = { ...holder.pos };
+
+        // Tackling: a dribbling carrier can be challenged for the ball, not
+        // just a kicked one. Without this, a carrier who never kicks is
+        // completely undisputed — bumping into them during movement has no
+        // effect on possession at all (movement collision and ball
+        // possession are handled by entirely separate code). Same
+        // decisive-vs-scrappy split as an interception: a commanding win is
+        // a clean, instant takeover; a narrow one only knocks the ball loose
+        // (reusing the exact same roll/deflection machinery as a mishit or
+        // half-blocked shot).
+        const challenger = current
+          .filter((p) => p.side !== holder.side && !tackleAttempted.has(p.id))
+          .map((p) => ({ p, d: distance(p.pos, holder.pos) }))
+          .filter(({ d }) => d <= TACKLE_RADIUS)
+          .sort((a, b) => a.d - b.d)[0]?.p;
+
+        if (challenger) {
+          const { winner, margin } = resolveContestDetailed([challenger, holder], "tackle");
+          if (winner === challenger) {
+            if (margin >= DECISIVE_CONTEST_MARGIN) {
+              // Clean tackle: turnover, freeze everything else right here.
+              currentCarrierId = challenger.id;
+              lastControllingSide = challenger.side;
+              ballPos = { ...challenger.pos };
+              events.push(`Tackle: ${challenger.player.name} takes the ball off ${holder.player.name}`);
+              snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+              break;
+            }
+            // Not decisive — the ball squirts loose rather than cleanly
+            // changing hands. No "flight direction" to bias off here (unlike
+            // a kick deflection), so the scatter direction is fully random.
+            const angle = Math.random() * 2 * Math.PI;
+            const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+            currentCarrierId = null;
+            roll = {
+              pos: { ...holder.pos },
+              vx: dir.x * DEFLECTION_SPEED,
+              vy: dir.y * DEFLECTION_SPEED,
+              excludeId: challenger.id,
+            };
+            ballPos = { ...holder.pos };
+            events.push(`${challenger.player.name} half-tackles ${holder.player.name} — loose ball!`);
+          } else {
+            tackleAttempted.add(challenger.id);
+          }
+        }
+      }
     }
 
     // Reactive layer: anyone close enough to a ball that's still loose after

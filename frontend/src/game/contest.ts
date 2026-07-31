@@ -10,7 +10,7 @@ import type { Pawn } from "./types";
  * duel, a shot vs. a goalkeeper) means adding a table entry here, not
  * touching the resolution loop that calls into this.
  */
-export type ContestKind = "loose_ball" | "interception";
+export type ContestKind = "loose_ball" | "interception" | "tackle";
 
 interface AttributeWeights {
   skill: number;
@@ -27,6 +27,11 @@ const WEIGHTS: Record<ContestKind, AttributeWeights> = {
   // only helps a defender close the distance in time, it doesn't replace
   // being switched on.
   interception: { skill: 0.65, pace: 0.25, stamina: 0.1 },
+  // Challenging a dribbling carrier for the ball: still mostly a technical
+  // read (timing the tackle without missing it), but closing speed matters
+  // more here than it does for reading a pass, since the carrier is
+  // actively moving away/around the challenger.
+  tackle: { skill: 0.6, pace: 0.3, stamina: 0.1 },
 };
 
 const RANDOM_SPREAD = 30; // roll gets +/- half of this, i.e. +/-15
