@@ -15,6 +15,7 @@ import {
   VIEW_W,
   type Projector,
 } from "../game/iso";
+import { classifyKickTarget, intentLabel, riskLabel } from "../game/kickIntent";
 import type { Ball, Pawn, Side, Vec2 } from "../game/types";
 import { EventBus } from "./EventBus";
 
@@ -67,6 +68,10 @@ export class MatchScene extends Phaser.Scene {
   private ballSprite!: Phaser.GameObjects.Image;
   private lastBallPos: Vec2 = { x: -999, y: -999 };
   private pawnVisuals = new Map<string, PawnVisual>();
+  // A single reusable label for the planned kick's aim-risk readout — at
+  // most one pawn (the ball carrier) can have a plannedKick at a time, so
+  // there's never a need for more than one of these.
+  private kickLabelText!: Phaser.GameObjects.Text;
 
   private state: MatchSyncState | null = null;
   private callbacks: MatchCallbacks | null = null;
@@ -97,6 +102,18 @@ export class MatchScene extends Phaser.Scene {
 
     this.ballShadow = this.add.ellipse(0, 0, 18, 9, 0x000000, 0.4);
     this.ballSprite = this.add.image(0, 0, "ball").setDisplaySize(26, 26);
+
+    this.kickLabelText = this.add
+      .text(0, 0, "", {
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: "#ffffff",
+        backgroundColor: "#00000099",
+        padding: { x: 6, y: 3 },
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(2000)
+      .setVisible(false);
 
     this.buildCellZones();
 
@@ -311,17 +328,36 @@ export class MatchScene extends Phaser.Scene {
     const g = this.cellsGfx;
     g.clear();
     if (!this.state) return;
-    const { reachableCells, kickMode } = this.state;
+    const { reachableCells, kickMode, pawns, selectedId } = this.state;
     const p = this.projector;
+    // In kick mode, tint each reachable cell by what kicking there would
+    // actually mean — a shot at goal, a pass to a teammate, or just
+    // clearing the ball — computed the same way the aim-ring label is, so
+    // the intent is visible before you even commit to a target.
+    const selectedPawn = kickMode ? pawns.find((pw) => pw.id === selectedId) ?? null : null;
+    const COLORS: Record<"shot" | "pass" | "clear", { fill: number; stroke: number }> = {
+      shot: { fill: 0xe53935, stroke: 0xff6659 },
+      pass: { fill: 0x43a047, stroke: 0x76d275 },
+      clear: { fill: 0xff8c00, stroke: 0xffa028 },
+    };
     for (const key of reachableCells) {
       const [xs, ys] = key.split(",");
       const x = Number(xs);
       const y = Number(ys);
       const corners = [p.toIso(x, y), p.toIso(x + 1, y), p.toIso(x + 1, y + 1), p.toIso(x, y + 1)];
-      g.fillStyle(kickMode ? 0xff8c00 : 0xffff64, kickMode ? 0.35 : 0.3);
-      fillPoly(g, corners);
-      g.lineStyle(1.5, kickMode ? 0xffa028 : 0xffff78, 0.9);
-      strokePoly(g, corners, true);
+      if (selectedPawn) {
+        const intent = classifyKickTarget({ x, y }, selectedPawn.side, selectedPawn.id, pawns);
+        const { fill, stroke } = COLORS[intent];
+        g.fillStyle(fill, 0.35);
+        fillPoly(g, corners);
+        g.lineStyle(1.5, stroke, 0.9);
+        strokePoly(g, corners, true);
+      } else {
+        g.fillStyle(0xffff64, 0.3);
+        fillPoly(g, corners);
+        g.lineStyle(1.5, 0xffff78, 0.9);
+        strokePoly(g, corners, true);
+      }
     }
   }
 
@@ -473,6 +509,7 @@ export class MatchScene extends Phaser.Scene {
     g.clear();
     if (!this.state) return;
     const p = this.projector;
+    let labelShown = false;
     for (const pawn of this.state.pawns) {
       if (pawn.side !== this.state.controllingSide) continue;
       const base = p.toIso(pawn.pos.x + 0.5, pawn.pos.y + 0.5);
@@ -513,8 +550,18 @@ export class MatchScene extends Phaser.Scene {
         }
         g.lineStyle(1.5, 0xef6c00, 0.5);
         strokePoly(g, spreadPts, true);
+
+        // Plain-language readout next to the ring: what kind of kick this is
+        // and how risky it actually is, instead of leaving the ring's size
+        // to speak for itself.
+        const intent = classifyKickTarget(pawn.plannedKick, pawn.side, pawn.id, this.state.pawns);
+        this.kickLabelText.setText(`${intentLabel(intent)}: ${riskLabel(sigma)}`);
+        this.kickLabelText.setPosition(kick.x, kick.y - 26);
+        this.kickLabelText.setVisible(true);
+        labelShown = true;
       }
     }
+    if (!labelShown) this.kickLabelText.setVisible(false);
   }
 }
 

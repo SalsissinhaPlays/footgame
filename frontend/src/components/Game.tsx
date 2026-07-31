@@ -46,6 +46,22 @@ function inBounds(pos: Vec2): boolean {
   );
 }
 
+/**
+ * Classifies an event log line by category so the log is scannable at a
+ * glance (color/weight) rather than every line reading the same regardless
+ * of whether it's a goal or a routine pass. Matched by substring against the
+ * fixed phrasing resolve.ts's event strings always use, same approach the
+ * project's own test scripts already use to check which event fired.
+ */
+function eventClass(e: string): string {
+  if (e.includes("GOAL")) return "event-goal";
+  if (e.includes("Interception:") || e.includes("Tackle:")) return "event-turnover";
+  if (e.includes("half-tackles") || e.includes("half-blocks")) return "event-contested";
+  if (e.includes("Pass:")) return "event-pass";
+  if (e.includes("goes out of play") || e.includes("off target")) return "event-miss";
+  return "";
+}
+
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
   const homePlayers = pawns.filter((p) => p.side === "home").map((p) => p.player);
   const awayPlayers = pawns.filter((p) => p.side === "away").map((p) => p.player);
@@ -427,7 +443,9 @@ export function Game({ mode, onExitToMenu }: Props) {
       )}
       <ul className={`events-log ${events.length > 0 ? "" : "empty"}`}>
         {events.map((e, i) => (
-          <li key={i}>{e}</li>
+          <li key={i} className={eventClass(e)}>
+            {e}
+          </li>
         ))}
       </ul>
       <p className="camera-hint">

@@ -243,6 +243,31 @@
   border-color: transparent;
 }
 
+/* Category coloring so the log is scannable at a glance — shape/color
+   before you even read the words. */
+.events-log .event-goal {
+  color: #b8860b;
+  font-weight: 700;
+}
+
+.events-log .event-turnover {
+  color: #c62828;
+  font-weight: 600;
+}
+
+.events-log .event-contested {
+  color: #ef6c00;
+  font-weight: 600;
+}
+
+.events-log .event-pass {
+  color: #2e7d32;
+}
+
+.events-log .event-miss {
+  color: #8d8d8d;
+}
+
 .hint {
   color: #666;
   font-size: 14px;
