@@ -251,15 +251,56 @@ export class MatchScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * A proper 3D goal box: net panels (back wall, top/bottom interior sides,
+   * roof) behind the frame, plus posts + crossbar at the goal line itself.
+   * The pre-Phaser SVG renderer had all of this (see git history: "Build a
+   * proper 3D goal frame... instead of a dark void") — only the bare
+   * post/crossbar lines survived the migration to this Phaser scene, which
+   * is why the goal reads as three thin lines that blend into the pitch
+   * boundary stroke instead of an actual visible structure.
+   */
   private drawGoalFrame(g: Phaser.GameObjects.Graphics, atHome: boolean) {
     const p = this.projector;
     const lineX = atHome ? 0 : GRID_COLS;
+    const netX = atHome ? -GOAL_NET_DEPTH : GRID_COLS + GOAL_NET_DEPTH;
     const rise = 34;
+
     const frontTop = p.toIso(lineX, GOAL_ROW_MIN);
     const frontBottom = p.toIso(lineX, GOAL_ROW_MAX + 1);
+    const backTop = p.toIso(netX, GOAL_ROW_MIN);
+    const backBottom = p.toIso(netX, GOAL_ROW_MAX + 1);
+
     const frontTopRise = { x: frontTop.x, y: frontTop.y - rise };
     const frontBottomRise = { x: frontBottom.x, y: frontBottom.y - rise };
+    const backTopRise = { x: backTop.x, y: backTop.y - rise };
+    const backBottomRise = { x: backBottom.x, y: backBottom.y - rise };
 
+    // Net panels: back wall, top and bottom interior side walls, and the
+    // roof closing off the box — the front (goal mouth) and floor are left
+    // open, same as a real net.
+    g.fillStyle(0x0a0c08, 0.45);
+    fillPoly(g, [backTop, backBottom, backBottomRise, backTopRise]);
+    fillPoly(g, [frontTop, backTop, backTopRise, frontTopRise]);
+    fillPoly(g, [frontBottom, backBottom, backBottomRise, frontBottomRise]);
+    fillPoly(g, [frontTopRise, frontBottomRise, backBottomRise, backTopRise]);
+
+    // A light hatch on the back panel only (the most visually prominent
+    // one, facing the camera through the goal mouth) to read as netting
+    // rather than a flat dark slab.
+    g.lineStyle(1, 0xffffff, 0.3);
+    const HATCH_LINES = 6;
+    for (let i = 1; i < HATCH_LINES; i++) {
+      const t = i / HATCH_LINES;
+      const a = lerpPoint(backTop, backBottom, t);
+      const b = lerpPoint(backTopRise, backBottomRise, t);
+      g.lineBetween(a.x, a.y, b.x, b.y);
+      const c = lerpPoint(backTop, backTopRise, t);
+      const d = lerpPoint(backBottom, backBottomRise, t);
+      g.lineBetween(c.x, c.y, d.x, d.y);
+    }
+
+    // Frame: posts at the goal line, crossbar joining their risen tops.
     g.lineStyle(5, 0xf7f7f7, 1);
     g.lineBetween(frontTop.x, frontTop.y, frontTopRise.x, frontTopRise.y);
     g.lineBetween(frontBottom.x, frontBottom.y, frontBottomRise.x, frontBottomRise.y);

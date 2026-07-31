@@ -7,8 +7,10 @@ import {
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
+  GRID_ROWS,
   KICK_RANGE,
   MOVE_RANGE,
+  OOB_CELLS,
   PAWN_COLLISION_RADIUS,
   PAWN_SPEED_PER_TICK,
   REACT_RADIUS,
@@ -48,6 +50,44 @@ function goalScoredAt(pos: Vec2): Side | null {
   if (pos.x < 0) return "away";
   if (pos.x >= GRID_COLS) return "home";
   return null;
+}
+
+/**
+ * Whether the ball's movement THIS TICK (from `from` to `to`) actually
+ * crossed a goal line, checked at the crossing point itself rather than
+ * just the tick's end position. A fast roll or deflection can jump from
+ * well before the line to well past it — including past the goal-row band
+ * entirely — within a single tick; sampling only the endpoint (as a plain
+ * goalScoredAt(to) would) can miss the exact moment the ball was actually
+ * within the goal mouth, the same tunneling problem already solved for
+ * ball-vs-pawn interception via segment checks.
+ */
+export function goalCrossedAlong(from: Vec2, to: Vec2): Side | null {
+  if (from.x >= 0 && to.x < 0) {
+    const t = from.x / (from.x - to.x);
+    if (isInGoalRows(from.y + (to.y - from.y) * t)) return "away";
+  }
+  if (from.x < GRID_COLS && to.x >= GRID_COLS) {
+    const t = (GRID_COLS - from.x) / (to.x - from.x);
+    if (isInGoalRows(from.y + (to.y - from.y) * t)) return "home";
+  }
+  return goalScoredAt(to);
+}
+
+// The ball is never allowed to end a tick's movement beyond the walkable
+// out-of-bounds apron — without this, a missed shot/deflection/roll that
+// isn't a goal could sail off past where any pawn could ever be planned to
+// reach, permanently stranding it.
+const BALL_BOUND_MIN_X = -OOB_CELLS;
+const BALL_BOUND_MAX_X = GRID_COLS + OOB_CELLS;
+const BALL_BOUND_MIN_Y = -OOB_CELLS;
+const BALL_BOUND_MAX_Y = GRID_ROWS + OOB_CELLS;
+
+export function clampBallToBounds(pos: Vec2): Vec2 {
+  return {
+    x: Math.max(BALL_BOUND_MIN_X, Math.min(BALL_BOUND_MAX_X, pos.x)),
+    y: Math.max(BALL_BOUND_MIN_Y, Math.min(BALL_BOUND_MAX_Y, pos.y)),
+  };
 }
 
 function key(v: Vec2): string {
@@ -483,13 +523,25 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       const tickStart = pointAlongFlight(flight);
       flight.traveled = Math.min(flight.totalDist, flight.traveled + BALL_SPEED);
       const point = pointAlongFlight(flight);
-      const goal = goalScoredAt(point);
+      const goal = goalCrossedAlong(tickStart, point);
       if (goal) {
         ballPos = point;
         events.push(goal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
         const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
         snapshots.push({ pawns: frozen, ball: { ...ballPos } });
         return { snapshots, events, goal };
+      }
+
+      const clampedPoint = clampBallToBounds(point);
+      if (clampedPoint.x !== point.x || clampedPoint.y !== point.y) {
+        // Missed everything and left the playable+apron area — stops right
+        // at the boundary instead of sailing off somewhere unreachable.
+        flight = null;
+        currentCarrierId = null;
+        ballPos = clampedPoint;
+        events.push("A bola sai de campo");
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+        continue;
       }
 
       const outcome = checkCapture(flight, tickStart, point, current);
@@ -537,12 +589,22 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       roll.vy *= ROLL_FRICTION;
       ballPos = roll.pos;
 
-      const rollGoal = goalScoredAt(ballPos);
+      const rollGoal = goalCrossedAlong(rollFrom, ballPos);
       if (rollGoal) {
         events.push(rollGoal === "home" ? "GOL do time da casa!" : "GOL do time visitante!");
         const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
         snapshots.push({ pawns: frozen, ball: { ...ballPos } });
         return { snapshots, events, goal: rollGoal };
+      }
+
+      const clampedRollPos = clampBallToBounds(ballPos);
+      if (clampedRollPos.x !== ballPos.x || clampedRollPos.y !== ballPos.y) {
+        roll = null;
+        currentCarrierId = null;
+        ballPos = clampedRollPos;
+        events.push("A bola sai de campo");
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos } });
+        continue;
       }
 
       const claimants = current.filter(
