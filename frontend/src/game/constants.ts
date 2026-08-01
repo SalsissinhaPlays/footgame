@@ -51,6 +51,28 @@ export const CAPTURE_RADIUS = 1.2;
 // takeover.
 export const DECISIVE_CONTEST_MARGIN = 15;
 
+// Loft (airborne kick) height, in the same meter-scale world units as
+// everything else. A lofted flight's height follows a simple parabola
+// (0 at kickoff, apex at the midpoint, back to 0 on landing) — see
+// heightAlongFlight in resolve.ts. Apex scales with kick distance (a long
+// cross arcs higher than a short chip) but is bounded on both ends so even
+// a very short loft clears BALL_REACH_HEIGHT for at least a moment, and a
+// very long cross doesn't arc absurdly high. Starting points for
+// playtesting, expected to move together.
+export const LOFT_APEX_HEIGHT_RATIO = 0.2; // apex as a fraction of total kick distance
+export const LOFT_APEX_MIN = 2.5; // meters — always clears BALL_REACH_HEIGHT briefly
+export const LOFT_APEX_MAX = 6; // meters — cap for a max-range KICK_RANGE cross
+
+// Height, in meters, at or below which the ball is considered "reachable" —
+// existing capture/interception rules apply unchanged. Above it, the ball
+// is out of anyone's reach and the flight just sails on overhead, no matter
+// who's standing underneath. Roughly a standing pawn's unaided reach
+// (~2-2.5m); this is also the single seam a future header contest is meant
+// to slot into (a pawn near a descending ball within this height winning it
+// away via jump/head attributes) instead of "nobody can touch it" — do not
+// add header-specific logic here, just keep this threshold honest.
+export const BALL_REACH_HEIGHT = 2.2;
+
 // Post-landing ball physics: an unopposed kick or a scrappy (non-decisive)
 // challenge doesn't stop the ball dead — it keeps a bit of momentum and
 // rolls on, losing speed each tick until it settles or someone reaches it.
@@ -129,3 +151,34 @@ export const PRESSURE_SLOW_FACTOR = 0.6;
 // playtesting.
 export const SPRINT_SPEED_MULTIPLIER = 1.5;
 export const SPRINT_COOLDOWN_TURNS = 3;
+
+// Goalkeeper's own box — shared by rendering (MatchScene's redrawField) and
+// gameplay (GK auto-positioning, proactive claim eligibility, collision
+// relief; see resolve.ts). Same numbers the pitch has always drawn; now a
+// single source of truth instead of duplicated between draw code and logic.
+export const GK_SIX_YARD_DEPTH = 1.2;
+export const GK_PENALTY_DEPTH = 2.6;
+export const GK_PENALTY_PAD = 1.5;
+
+// GK save-contest tuning (see contest.ts's reachFactor/rollSaveAttempt and
+// resolve.ts's attemptSave). jumping deliberately doesn't appear as a
+// WEIGHTS.save entry in contest.ts — an additive bonus scaling with shot
+// distance would let a maxed-jumping keeper dominate every roll regardless
+// of distance. Instead it only widens GK_STRETCH_RANGE_BASE (the range of
+// full shot_stopping/reflexes effectiveness); beyond that range,
+// effectiveness falls off linearly over GK_REACH_FALLOFF_RANGE down to
+// GK_MIN_REACH_FACTOR rather than to 0, so even a near-impossible stretch
+// keeps a sliver of a chance. All starting points for playtesting, expected
+// to move together.
+export const GK_STRETCH_RANGE_BASE = 1.5; // world units of full-effectiveness reach even at jumping = 0
+export const GK_STRETCH_RANGE_PER_JUMPING = 0.02; // extra full-effectiveness reach per point of jumping (0-100) — up to +2.0 at jumping=100
+export const GK_REACH_FALLOFF_RANGE = 3; // world units beyond the stretch range over which effectiveness linearly decays to the floor
+export const GK_MIN_REACH_FACTOR = 0.15; // floor — a near-impossible stretch still keeps a sliver of a chance
+export const GK_HEIGHT_DISTANCE_WEIGHT = 0.6; // converts meters of ballHeight into "equivalent" lateral reach-distance — an aerial shot needs a real leap even if laterally close
+export const SAVE_DIFFICULTY_THRESHOLD = 55; // baseline roll a shot "presents"; a specialist keeper (shot_stopping/reflexes ~70+) at full reach clears this comfortably, an average one (~50) is close to a coinflip
+
+// GK claim/positioning tuning (see resolve.ts's checkCapture integration and
+// gkAutoTarget).
+export const GK_CLAIM_RADIUS = 5; // expanded reach for an Aggressive GK's proactive claim, vs. the generic CAPTURE_RADIUS (1.2) any defender gets
+export const GK_ANCHOR_DEPTH = 0.8; // resting depth off the goal line for on-the-line/default auto-positioning
+export const GK_AGGRESSIVE_THREAT_RANGE = 14; // distance from goal line within which an Aggressive GK considers advancing off his line at all

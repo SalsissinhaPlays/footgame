@@ -35,6 +35,7 @@ export function buildFormation(players: PlayerDTO[], side: Side): Pawn[] {
       pos,
       plannedPos: null,
       plannedKick: null,
+      plannedKickLoft: false,
       stance: null,
       plannedSprint: false,
       sprintCooldown: 0,

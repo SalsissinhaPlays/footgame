@@ -13,7 +13,7 @@ import {
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
-import { TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
+import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
 import type { Ball, Pawn, Stance, TeamDTO, Vec2 } from "../game/types";
 import type { MatchCallbacks } from "../phaser/MatchScene";
@@ -59,16 +59,31 @@ function eventClass(e: string): string {
   return "";
 }
 
-const STANCE_OPTIONS: { key: "none" | "aggressive" | "pressure" | "cover_passing" | "man_mark"; label: string }[] = [
-  { key: "none", label: "None" },
-  { key: "aggressive", label: "Aggressive" },
-  { key: "pressure", label: "Pressure" },
-  { key: "cover_passing", label: "Cover passing" },
-  { key: "man_mark", label: "Man-mark" },
+// Two separate stance menus rather than one flat list — a GK's stances
+// (positioning style) and an outfield pawn's (defensive orders) don't mean
+// anything for the other position, so each only offers its own set (see
+// stanceOptionsFor). Both share the same "None" entry/key.
+const NONE_OPTION = { key: "none" as const, label: "None" };
+const OUTFIELD_STANCE_OPTIONS = [
+  NONE_OPTION,
+  { key: "aggressive" as const, label: "Aggressive" },
+  { key: "pressure" as const, label: "Pressure" },
+  { key: "cover_passing" as const, label: "Cover passing" },
+  { key: "man_mark" as const, label: "Man-mark" },
 ];
+const GK_STANCE_OPTIONS = [
+  NONE_OPTION,
+  { key: "gk_on_line" as const, label: "On the line" },
+  { key: "gk_aggressive" as const, label: "Aggressive" },
+];
+const ALL_STANCE_OPTIONS = [...OUTFIELD_STANCE_OPTIONS, ...GK_STANCE_OPTIONS];
+
+function stanceOptionsFor(pawn: Pawn) {
+  return pawn.player.position === "GK" ? GK_STANCE_OPTIONS : OUTFIELD_STANCE_OPTIONS;
+}
 
 function stanceLabel(stance: Stance | null): string {
-  const opt = STANCE_OPTIONS.find((o) => o.key === (stance?.kind ?? "none"));
+  const opt = ALL_STANCE_OPTIONS.find((o) => o.key === (stance?.kind ?? "none"));
   return opt?.label ?? "None";
 }
 
@@ -114,13 +129,32 @@ export function Game({ mode, onExitToMenu }: Props) {
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
-  const [camera, setCamera] = useState({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT, panX: 0, panY: 0 });
+  // The camera's pan is tracked as a WORLD-space point to look at (grid
+  // coordinates, defaulting to the pitch center) rather than a raw
+  // view-space pixel offset — the latter is what made rotating/tilting
+  // while panned swing the whole field around the pitch's fixed center
+  // instead of around wherever the camera was actually focused (the
+  // projection itself always keeps the pitch's OWN center pinned to the
+  // same view-space point regardless of rotation, so a fixed view-space
+  // offset stops meaning the same world location the moment the angle
+  // changes). Re-projecting a world-space focus point through whatever the
+  // current rotation/tilt is keeps that same spot centered through camera
+  // moves, which is what "rotate around focus" actually requires.
+  const [camera, setCamera] = useState({
+    zoom: 1,
+    rotation: 0,
+    tilt: TILT_DEFAULT,
+    focusX: GRID_COLS / 2,
+    focusY: GRID_ROWS / 2,
+  });
   const pressedKeys = useRef<Set<string>>(new Set());
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [pawns, setPawns] = useState<Pawn[]>([]);
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
+  const [ballHeight, setBallHeight] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
+  const [kickLoft, setKickLoft] = useState(false);
   const [stanceMenuOpen, setStanceMenuOpen] = useState(false);
   // True while the player has picked "Man-mark" for the selected pawn and
   // is now expected to click an opponent pawn instead of a cell/destination.
@@ -157,10 +191,15 @@ export function Game({ mode, onExitToMenu }: Props) {
   }, []);
 
   // WASD pans the camera (screen-relative: W/S move the view up/down, A/D
-  // left/right — these operate directly in the same projected view-space
-  // MatchScene's centerOn already uses, so no rotation compensation is
-  // needed). Runs as an animation-frame loop rather than per-keydown steps
-  // so holding a key pans smoothly and proportionally to real elapsed time.
+  // left/right). The delta itself is still applied in view-space, same as
+  // before — that's what keeps a key's direction meaning the same thing on
+  // screen no matter how the camera is currently rotated — but the RESULT
+  // is immediately converted back to a world-space focus point (via the
+  // current rotation/tilt's projector) rather than staying a raw view-space
+  // offset, so subsequent rotation/tilt changes re-center on the same real
+  // pitch location instead of sliding back toward the pitch's fixed center.
+  // Runs as an animation-frame loop rather than per-keydown steps so
+  // holding a key pans smoothly and proportionally to real elapsed time.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const key = e.key.toLowerCase();
@@ -183,13 +222,16 @@ export function Game({ mode, onExitToMenu }: Props) {
       if (keys.size > 0) {
         setCamera((c) => {
           const speed = (PAN_SPEED / c.zoom) * dt;
-          let panX = c.panX;
-          let panY = c.panY;
-          if (keys.has("a")) panX -= speed;
-          if (keys.has("d")) panX += speed;
-          if (keys.has("w")) panY -= speed;
-          if (keys.has("s")) panY += speed;
-          return { ...c, panX, panY };
+          let dx = 0;
+          let dy = 0;
+          if (keys.has("a")) dx -= speed;
+          if (keys.has("d")) dx += speed;
+          if (keys.has("w")) dy -= speed;
+          if (keys.has("s")) dy += speed;
+          const projector = createProjector(c.rotation, c.tilt);
+          const currentView = projector.toIso(c.focusX, c.focusY);
+          const nextFocus = projector.fromIso(currentView.x + dx, currentView.y + dy);
+          return { ...c, focusX: nextFocus.x, focusY: nextFocus.y };
         });
       }
       raf = requestAnimationFrame(tick);
@@ -248,7 +290,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function resetCamera() {
-    setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT, panX: 0, panY: 0 });
+    setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT, focusX: GRID_COLS / 2, focusY: GRID_ROWS / 2 });
   }
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
@@ -281,6 +323,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
     if (pawn.side !== controllingSide) return;
     setKickMode(false);
+    setKickLoft(false);
     setPickingMarkTarget(false);
     setStanceMenuOpen(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
@@ -295,7 +338,9 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (kickMode && selectedIsCarrier) {
       setPawns((prev) =>
         prev.map((p) =>
-          p.id === selectedPawn.id ? { ...p, plannedKick: point, plannedPos: null } : p
+          p.id === selectedPawn.id
+            ? { ...p, plannedKick: point, plannedPos: null, plannedKickLoft: kickLoft }
+            : p
         )
       );
     } else {
@@ -303,13 +348,14 @@ export function Game({ mode, onExitToMenu }: Props) {
       setPawns((prev) =>
         prev.map((p) =>
           p.id === selectedPawn.id
-            ? { ...p, plannedPos: cancel ? null : point, plannedKick: null }
+            ? { ...p, plannedPos: cancel ? null : point, plannedKick: null, plannedKickLoft: false }
             : p
         )
       );
     }
     setSelectedId(null);
     setKickMode(false);
+    setKickLoft(false);
     setPickingMarkTarget(false);
   }
 
@@ -321,7 +367,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   /** Handles a click on one of the stance dropdown's options. Man-mark needs a target pawn picked next, so it doesn't set the stance directly. */
-  function handleStanceOptionClick(key: (typeof STANCE_OPTIONS)[number]["key"]) {
+  function handleStanceOptionClick(key: (typeof ALL_STANCE_OPTIONS)[number]["key"]) {
     setStanceMenuOpen(false);
     if (key === "man_mark") {
       setPickingMarkTarget(true);
@@ -364,6 +410,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     sceneRef.current?.syncState({
       pawns,
       ball,
+      ballHeight,
       selectedId,
       reachRadius,
       kickMode,
@@ -387,6 +434,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       const stillMoving = !nothingMoved(snapshot.pawns, snapshot.ball, prevPawns, prevBallPos);
       setPawns(snapshot.pawns);
       setBall({ pos: snapshot.ball });
+      setBallHeight(snapshot.ballHeight);
       if (snapshot.events.length > 0) {
         revealedEvents = [...revealedEvents, ...snapshot.events];
         setEvents(revealedEvents);
@@ -419,6 +467,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       await sleep(600);
       setPawns((prev) => kickoffFormation(prev));
       setBall({ pos: BALL_START });
+      setBallHeight(0);
     }
 
     setTurn((t) => t + 1);
@@ -431,6 +480,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (resolving) return;
     setSelectedId(null);
     setKickMode(false);
+    setKickLoft(false);
     setPickingMarkTarget(false);
 
     if (mode === "ai") {
@@ -501,6 +551,9 @@ export function Game({ mode, onExitToMenu }: Props) {
                       ? `Cooldown (${selectedPawn.sprintCooldown})`
                       : "Ready"}
                 </div>
+                {selectedPawn.plannedKick && (
+                  <div className="pawn-info-row">Kick: {selectedPawn.plannedKickLoft ? "Loft" : "Ground"}</div>
+                )}
               </div>
             ) : (
               <div className="hud-panel pawn-info pawn-info-empty">No pawn selected</div>
@@ -567,6 +620,16 @@ export function Game({ mode, onExitToMenu }: Props) {
                     Kick
                   </button>
                 </div>
+                {kickMode && selectedIsCarrier && (
+                  <div className="action-row">
+                    <button type="button" className={!kickLoft ? "active" : ""} onClick={() => setKickLoft(false)}>
+                      Ground
+                    </button>
+                    <button type="button" className={kickLoft ? "active" : ""} onClick={() => setKickLoft(true)}>
+                      Loft
+                    </button>
+                  </div>
+                )}
                 <div className="action-row stance-row">
                   <button
                     type="button"
@@ -577,7 +640,7 @@ export function Game({ mode, onExitToMenu }: Props) {
                   </button>
                   {stanceMenuOpen && (
                     <div className="stance-menu">
-                      {STANCE_OPTIONS.map((opt) => (
+                      {stanceOptionsFor(selectedPawn).map((opt) => (
                         <button
                           type="button"
                           key={opt.key}
@@ -647,8 +710,8 @@ export function Game({ mode, onExitToMenu }: Props) {
       {(camera.zoom !== 1 ||
         camera.rotation !== 0 ||
         camera.tilt !== TILT_DEFAULT ||
-        camera.panX !== 0 ||
-        camera.panY !== 0) && (
+        Math.abs(camera.focusX - GRID_COLS / 2) > 1e-6 ||
+        Math.abs(camera.focusY - GRID_ROWS / 2) > 1e-6) && (
         <div className="camera-reset-wrap">
           <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
             Reset camera

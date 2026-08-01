@@ -3,10 +3,14 @@ import { landingSpread } from "../game/aim";
 import {
   CAPTURE_RADIUS,
   CHECKER_CELL_SIZE,
+  GK_PENALTY_DEPTH,
+  GK_PENALTY_PAD,
+  GK_SIX_YARD_DEPTH,
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
   GRID_ROWS,
+  LOFT_APEX_MAX,
   PAWN_COLLISION_RADIUS,
   PRESSURE_RADIUS,
   TACKLE_RADIUS,
@@ -26,12 +30,15 @@ import { EventBus } from "./EventBus";
 export interface MatchSyncState {
   pawns: Pawn[];
   ball: Ball;
+  /** How high off the ground the ball currently is (meters) — 0 unless a lofted kick is in flight. Drives the ball sprite's extra lift and the shadow's shrink/fade. */
+  ballHeight: number;
   selectedId: string | null;
   /** How far (world units) the selected pawn can move/kick this turn, or null if nothing's selected. */
   reachRadius: number | null;
   kickMode: boolean;
   controllingSide: Side;
-  camera: { zoom: number; rotation: number; tilt: number; panX: number; panY: number };
+  /** focusX/focusY are the world (grid) point the camera looks at — re-projected through the current rotation/tilt every time either changes, which is what keeps that point centered through a rotate/tilt instead of the view swinging back toward the pitch's fixed center. */
+  camera: { zoom: number; rotation: number; tilt: number; focusX: number; focusY: number };
 }
 
 export interface MatchCallbacks {
@@ -39,9 +46,6 @@ export interface MatchCallbacks {
   onFieldClick: (point: Vec2) => void;
 }
 
-const SIX_YARD_DEPTH = 1.2;
-const PENALTY_DEPTH = 2.6;
-const PENALTY_PAD = 1.5;
 // How far into the pitch the reach-highlight's "shot zone" tint extends from
 // the goal line, and the radius of the "pass zone" halo drawn around each
 // in-range teammate — purely visual, not gameplay radii.
@@ -53,6 +57,12 @@ const SPRITE_HEIGHT = 90;
 // keeps all three close to their real proportions instead of stretching them.
 const SPRITE_WIDTH = SPRITE_HEIGHT * 0.44;
 const TWEEN_MS = 350;
+// Ball sprite lift: a flat baseline (matching the fixed offset this replaces)
+// plus extra pixels per world-unit of live ball height, mirroring how pawn
+// sprites are lifted by a flat pixel offset rather than anything routed
+// through the isometric projector's tilt math.
+const BALL_GROUND_LIFT = 10;
+const BALL_HEIGHT_PX_PER_UNIT = 14;
 
 function spriteKeyFor(pawn: Pawn): string {
   if (pawn.player.position === "GK") return "player_gk";
@@ -83,6 +93,10 @@ export class MatchScene extends Phaser.Scene {
   // most one pawn (the ball carrier) can have a plannedKick at a time, so
   // there's never a need for more than one of these.
   private kickLabelText!: Phaser.GameObjects.Text;
+  // Live readout of the ball's current height, shown only while it's
+  // actually off the ground (a lofted kick in flight) — hidden the rest of
+  // the time so it doesn't clutter a grounded, everyday turn.
+  private heightLabelText!: Phaser.GameObjects.Text;
 
   private state: MatchSyncState | null = null;
   private callbacks: MatchCallbacks | null = null;
@@ -122,6 +136,18 @@ export class MatchScene extends Phaser.Scene {
         color: "#ffffff",
         backgroundColor: "#00000099",
         padding: { x: 6, y: 3 },
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(2000)
+      .setVisible(false);
+
+    this.heightLabelText = this.add
+      .text(0, 0, "", {
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#29b6f6",
+        backgroundColor: "#00000099",
+        padding: { x: 5, y: 2 },
       })
       .setOrigin(0.5, 1)
       .setDepth(2000)
@@ -187,8 +213,15 @@ export class MatchScene extends Phaser.Scene {
     const minCenterY = visibleHalfH * 0.5;
     const maxCenterY = Math.max(minCenterY, VIEW_H - visibleHalfH * 0.5);
 
-    const centerX = Math.min(maxCenterX, Math.max(minCenterX, VIEW_W / 2 + state.camera.panX));
-    const centerY = Math.min(maxCenterY, Math.max(minCenterY, VIEW_H / 2 + state.camera.panY));
+    // Re-projecting the world-space focus point through THIS projector
+    // (bound to the current rotation/tilt) is what makes rotating/tilting
+    // pivot around wherever the camera is actually looking, instead of
+    // always swinging back around the pitch's fixed center — the previous
+    // version added a raw view-space pixel offset here, which stopped
+    // pointing at the same world location the moment the angle changed.
+    const focus = this.projector.toIso(state.camera.focusX, state.camera.focusY);
+    const centerX = Math.min(maxCenterX, Math.max(minCenterX, focus.x));
+    const centerY = Math.min(maxCenterY, Math.max(minCenterY, focus.y));
     this.cameras.main.centerOn(centerX, centerY);
   }
 
@@ -317,9 +350,9 @@ export class MatchScene extends Phaser.Scene {
 
     for (const x0 of [0, GRID_COLS]) {
       lg.lineStyle(2, 0xf2f2f2, 0.9);
-      strokePoly(lg, box(x0, PENALTY_DEPTH, PENALTY_PAD), true);
-      strokePoly(lg, box(x0, SIX_YARD_DEPTH, 0), true);
-      const spotX = x0 === 0 ? PENALTY_DEPTH - 0.4 : GRID_COLS - PENALTY_DEPTH + 0.4;
+      strokePoly(lg, box(x0, GK_PENALTY_DEPTH, GK_PENALTY_PAD), true);
+      strokePoly(lg, box(x0, GK_SIX_YARD_DEPTH, 0), true);
+      const spotX = x0 === 0 ? GK_PENALTY_DEPTH - 0.4 : GRID_COLS - GK_PENALTY_DEPTH + 0.4;
       const spot = p.toIso(spotX, GRID_ROWS / 2);
       lg.fillCircle(spot.x, spot.y, 2.5);
     }
@@ -577,13 +610,14 @@ export class MatchScene extends Phaser.Scene {
 
   private updateBall() {
     if (!this.state) return;
-    const { ball } = this.state;
+    const { ball, ballHeight } = this.state;
     const target = this.projector.toIso(ball.pos.x + 0.5, ball.pos.y + 0.5);
+    const liftPx = BALL_GROUND_LIFT + ballHeight * BALL_HEIGHT_PX_PER_UNIT;
     const moved = this.lastBallPos.x !== ball.pos.x || this.lastBallPos.y !== ball.pos.y;
     this.lastBallPos = { ...ball.pos };
     const doMove = () => {
       this.ballShadow.setPosition(target.x, target.y);
-      this.ballSprite.setPosition(target.x, target.y - 10);
+      this.ballSprite.setPosition(target.x, target.y - liftPx);
     };
     if (moved) {
       this.tweens.add({
@@ -596,15 +630,40 @@ export class MatchScene extends Phaser.Scene {
       this.tweens.add({
         targets: [this.ballSprite],
         x: target.x,
-        y: target.y - 10,
+        y: target.y - liftPx,
         duration: TWEEN_MS,
         ease: "Linear",
       });
     } else {
       doMove();
     }
+    // A ball high in the air casts a smaller, fainter contact shadow — the
+    // standard "height cue" that sells the lift without needing real 3D.
+    const heightFrac = Math.min(1, ballHeight / LOFT_APEX_MAX);
+    this.ballShadow.setScale(1 - 0.5 * heightFrac);
+    this.ballShadow.setAlpha(0.4 * (1 - 0.6 * heightFrac));
     this.ballShadow.setDepth(5);
     this.ballSprite.setDepth(1000);
+
+    // Numeric height readout, only while the ball is actually off the
+    // ground — a grounded, everyday turn stays uncluttered.
+    if (ballHeight > 0.05) {
+      // Text/graphics objects live in world space, so the camera's zoom
+      // (which is usually well under 1 — the fixed isometric world is much
+      // bigger in world-pixel terms than the canvas it's fit into, even at
+      // the "default" unzoomed view) shrinks them right along with the
+      // pitch, making a fixed font size unreadable once zoomed out.
+      // Counter-scaling by 1/zoom keeps this label's ON-SCREEN size
+      // constant regardless of how far zoomed in or out the camera is.
+      const labelScale = 1 / this.cameras.main.zoom;
+      this.heightLabelText.setText(`${ballHeight.toFixed(1)}m`);
+      this.heightLabelText.setPosition(target.x, target.y - liftPx - 22);
+      this.heightLabelText.setScale(labelScale);
+      this.heightLabelText.setDepth(2000);
+      this.heightLabelText.setVisible(true);
+    } else {
+      this.heightLabelText.setVisible(false);
+    }
   }
 
   // --- Planned-move ghosts/arrows ---
@@ -615,6 +674,14 @@ export class MatchScene extends Phaser.Scene {
     if (!this.state) return;
     const p = this.projector;
     let labelShown = false;
+    // Graphics are drawn in world space, so a fixed pixel width/radius
+    // shrinks right along with the pitch as the camera zooms out (and the
+    // "default" fit-to-screen zoom is already well under 1, since the
+    // fixed isometric world is much bigger in world-pixels than the
+    // canvas). Dividing by zoom keeps the kick-preview's line/dot/ring/label
+    // at a constant ON-SCREEN size regardless of zoom, so the accuracy
+    // readout stays legible whether zoomed in tight or all the way out.
+    const zoom = this.cameras.main.zoom;
     for (const pawn of this.state.pawns) {
       if (pawn.side !== this.state.controllingSide) continue;
       const base = p.toIso(pawn.pos.x + 0.5, pawn.pos.y + 0.5);
@@ -638,10 +705,14 @@ export class MatchScene extends Phaser.Scene {
       }
       if (pawn.plannedKick) {
         const kick = p.toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5);
-        g.lineStyle(3, 0xef6c00, 1);
+        // Lofted kicks get a distinct color from grounded ones, so the
+        // planning preview already hints that this ball will sail over
+        // defenders rather than along the ground.
+        const kickColor = pawn.plannedKickLoft ? 0x29b6f6 : 0xef6c00;
+        g.lineStyle(3 / zoom, kickColor, 1);
         g.lineBetween(base.x, base.y, kick.x, kick.y);
-        g.fillStyle(0xef6c00, 1);
-        g.fillCircle(kick.x, kick.y, 7);
+        g.fillStyle(kickColor, 1);
+        g.fillCircle(kick.x, kick.y, 7 / zoom);
 
         // Aim-spread preview: a ring around the target sized by how precise
         // this exact kick actually is (distance + the kicker's skill), using
@@ -662,7 +733,7 @@ export class MatchScene extends Phaser.Scene {
             )
           );
         }
-        g.lineStyle(1.5, 0xef6c00, 0.5);
+        g.lineStyle(1.5 / zoom, kickColor, 0.5);
         strokePoly(g, spreadPts, true);
 
         // Plain-language readout next to the ring: what kind of kick this is
@@ -670,7 +741,8 @@ export class MatchScene extends Phaser.Scene {
         // to speak for itself.
         const intent = classifyKickTarget(pawn.plannedKick, pawn.side, pawn.id, this.state.pawns);
         this.kickLabelText.setText(`${intentLabel(intent)}: ${riskLabel(sigma)}`);
-        this.kickLabelText.setPosition(kick.x, kick.y - 26);
+        this.kickLabelText.setPosition(kick.x, kick.y - 26 / zoom);
+        this.kickLabelText.setScale(1 / zoom);
         this.kickLabelText.setVisible(true);
         labelShown = true;
       }

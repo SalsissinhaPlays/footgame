@@ -56,6 +56,17 @@ export const PhaserGame = forwardRef<PhaserGameHandle, Props>(function PhaserGam
         width: container.clientWidth || VIEW_W,
         height: container.clientHeight || VIEW_H,
       },
+      // Phaser defaults to ALSO listening on the window (not just the
+      // canvas) so a drag-release outside the canvas still registers — but
+      // that means a click that starts AND ends on an HTML element floating
+      // on top of the canvas (the HUD's action-panel buttons) still bubbles
+      // up to Phaser's window listener and gets misread as a field click at
+      // whatever pitch position happens to project to that pixel. Nothing
+      // in this game needs off-canvas drag-release detection (camera orbit
+      // is handled entirely by Game.tsx's own mouse handlers, not Phaser's
+      // input), so scoping input strictly to the canvas fixes the HUD/pitch
+      // click conflict with no loss of functionality.
+      input: { windowEvents: false },
       scene: [MatchScene],
     };
     const game = new Phaser.Game(config);

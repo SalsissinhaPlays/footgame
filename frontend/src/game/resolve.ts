@@ -1,14 +1,24 @@
 import {
+  BALL_REACH_HEIGHT,
   BALL_SPEED,
   CAPTURE_RADIUS,
   DECISIVE_CONTEST_MARGIN,
   DEFLECTION_ANGLE_SPREAD,
   DEFLECTION_SPEED,
+  GK_AGGRESSIVE_THREAT_RANGE,
+  GK_ANCHOR_DEPTH,
+  GK_CLAIM_RADIUS,
+  GK_HEIGHT_DISTANCE_WEIGHT,
+  GK_PENALTY_DEPTH,
+  GK_PENALTY_PAD,
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
   GRID_ROWS,
   KICK_RANGE,
+  LOFT_APEX_HEIGHT_RATIO,
+  LOFT_APEX_MAX,
+  LOFT_APEX_MIN,
   MAN_MARK_PULL_WEIGHT,
   MOVE_RANGE,
   OOB_CELLS,
@@ -20,17 +30,21 @@ import {
   ROLL_FRICTION,
   ROLL_START_SPEED,
   ROLL_STOP_EPS,
+  SAVE_DIFFICULTY_THRESHOLD,
   SPRINT_SPEED_MULTIPLIER,
   TACKLE_RADIUS,
 } from "./constants";
 import { sampleLanding } from "./aim";
-import { resolveContest, resolveContestDetailed } from "./contest";
+import { resolveContest, resolveContestDetailed, rollSaveAttempt } from "./contest";
+import type { ContestKind } from "./contest";
 import { attemptsReaction } from "./reactions";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
 
 export interface ResolveSnapshot {
   pawns: Pawn[];
   ball: Vec2;
+  /** How high off the ground the ball is this tick (meters) — 0 unless a lofted kick is currently in flight. See heightAlongFlight. */
+  ballHeight: number;
   /** Events that occurred during this specific tick — lets a UI reveal the log in sync with the animation instead of dumping everything at the end. */
   events: string[];
 }
@@ -61,23 +75,43 @@ function goalScoredAt(pos: Vec2): Side | null {
 /**
  * Whether the ball's movement THIS TICK (from `from` to `to`) actually
  * crossed a goal line, checked at the crossing point itself rather than
- * just the tick's end position. A fast roll or deflection can jump from
- * well before the line to well past it — including past the goal-row band
- * entirely — within a single tick; sampling only the endpoint (as a plain
+ * just the tick's end position — and, unlike a plain yes/no, exactly WHERE
+ * it crossed, which is what a goalkeeper's save attempt is judged against
+ * (see attemptSave). A fast roll or deflection can jump from well before
+ * the line to well past it — including past the goal-row band entirely —
+ * within a single tick; sampling only the endpoint (as a plain
  * goalScoredAt(to) would) can miss the exact moment the ball was actually
  * within the goal mouth, the same tunneling problem already solved for
  * ball-vs-pawn interception via segment checks.
  */
-export function goalCrossedAlong(from: Vec2, to: Vec2): Side | null {
+export function goalCrossing(from: Vec2, to: Vec2): { side: Side; point: Vec2 } | null {
   if (from.x >= 0 && to.x < 0) {
     const t = from.x / (from.x - to.x);
-    if (isInGoalRows(from.y + (to.y - from.y) * t)) return "away";
+    const y = from.y + (to.y - from.y) * t;
+    if (isInGoalRows(y)) return { side: "away", point: { x: 0, y } };
   }
   if (from.x < GRID_COLS && to.x >= GRID_COLS) {
     const t = (GRID_COLS - from.x) / (to.x - from.x);
-    if (isInGoalRows(from.y + (to.y - from.y) * t)) return "home";
+    const y = from.y + (to.y - from.y) * t;
+    if (isInGoalRows(y)) return { side: "home", point: { x: GRID_COLS, y } };
   }
-  return goalScoredAt(to);
+  const scored = goalScoredAt(to);
+  return scored ? { side: scored, point: to } : null;
+}
+
+/** Thin wrapper kept for callers (including the project's throwaway verification scripts) that only care which side scored, not where. */
+export function goalCrossedAlong(from: Vec2, to: Vec2): Side | null {
+  return goalCrossing(from, to)?.side ?? null;
+}
+
+/** Whether `pos` sits within `side`'s goalkeeper box (six-yard or penalty, per depth/pad). Mirrors MatchScene.ts's own box polygon math (same raw grid coordinates) so "inside the drawn box" and "inside the gameplay box" can't drift apart. */
+function inGkZone(pos: Vec2, side: Side, depth: number, pad: number): boolean {
+  if (pos.y < GOAL_ROW_MIN - pad || pos.y > GOAL_ROW_MAX + pad) return false;
+  return side === "home" ? pos.x >= 0 && pos.x <= depth : pos.x <= GRID_COLS && pos.x >= GRID_COLS - depth;
+}
+
+function withinPenaltyBox(pos: Vec2, side: Side): boolean {
+  return inGkZone(pos, side, GK_PENALTY_DEPTH, GK_PENALTY_PAD);
 }
 
 // The ball is never allowed to end a tick's movement beyond the walkable
@@ -202,6 +236,8 @@ interface BallFlight {
   to: Vec2;
   totalDist: number;
   traveled: number;
+  /** Peak height (meters) of this flight's arc; 0 for a grounded kick, which is what keeps a grounded flight's height at exactly 0 for every tick without any special-casing elsewhere. */
+  apexHeight: number;
   /** Defenders who already had their one contest against this flight and lost — they don't get a second roll just for staying close. */
   contested: Set<string>;
 }
@@ -241,14 +277,19 @@ function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
   // like any other kick: same straight-line path, same tick-by-tick
   // interception checks. Only the target the flight aims for changes.
   const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill);
+  const totalDist = Math.max(distance(carrier.pos, landing.point), 1e-6);
+  const apexHeight = carrier.plannedKickLoft
+    ? Math.min(LOFT_APEX_MAX, Math.max(LOFT_APEX_MIN, totalDist * LOFT_APEX_HEIGHT_RATIO))
+    : 0;
   return {
     flight: {
       kickerId: carrier.id,
       kickerSide: carrier.side,
       from: { ...carrier.pos },
       to: landing.point,
-      totalDist: Math.max(distance(carrier.pos, landing.point), 1e-6),
+      totalDist,
       traveled: 0,
+      apexHeight,
       contested: new Set(),
     },
     mishit: landing.missBy > landing.sigma,
@@ -261,6 +302,12 @@ function pointAlongFlight(flight: BallFlight): Vec2 {
     x: flight.from.x + (flight.to.x - flight.from.x) * t,
     y: flight.from.y + (flight.to.y - flight.from.y) * t,
   };
+}
+
+/** Height (meters) along a flight's arc: a simple parabola, 0 at both ends, peaking at apexHeight halfway through — 0 for every tick of a grounded kick (apexHeight 0), and back to exactly 0 once the flight lands (t=1), with no special-casing needed at either boundary. */
+function heightAlongFlight(flight: BallFlight): number {
+  const t = Math.min(1, flight.traveled / flight.totalDist);
+  return flight.apexHeight * 4 * t * (1 - t);
 }
 
 interface CaptureOutcome {
@@ -287,10 +334,24 @@ interface CaptureOutcome {
  */
 function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): CaptureOutcome {
   const kicker = pawns.find((p) => p.id === flight.kickerId)!;
+  // An Aggressive-stance defending GK gets a wider reach than the generic
+  // CAPTURE_RADIUS any defender gets — but only inside his own penalty box,
+  // so a GK who's wandered upfield doesn't get a supernatural reach
+  // elsewhere. This is what lets him proactively claim a cross before it
+  // becomes a shot, not just react once the ball is already dangerous.
   const nearby = pawns
     .filter((p) => p.id !== flight.kickerId && !flight.contested.has(p.id))
     .map((p) => ({ p, d: distanceToSegment(p.pos, from, to) }))
-    .filter(({ d }) => d <= CAPTURE_RADIUS)
+    .filter(({ p, d }) => {
+      if (d <= CAPTURE_RADIUS) return true;
+      return (
+        p.side !== flight.kickerSide &&
+        p.player.position === "GK" &&
+        p.stance?.kind === "gk_aggressive" &&
+        withinPenaltyBox(p.pos, p.side) &&
+        d <= GK_CLAIM_RADIUS
+      );
+    })
     .sort((a, b) => a.d - b.d);
 
   for (const { p } of nearby) {
@@ -303,7 +364,12 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
         event: `Pass: ${kicker.player.name} finds ${p.player.name}`,
       };
     }
-    const { winner, margin } = resolveContestDetailed([p, kicker], "interception");
+    // A claiming GK reads the situation with goalkeeper attributes, not
+    // generic outfield interception attributes — same downstream handling
+    // either way (decisive win, scrappy deflection, or a lost attempt that
+    // leaves him marked and out of position for the rest of this flight).
+    const kind: ContestKind = p.player.position === "GK" && p.stance?.kind === "gk_aggressive" ? "gk_claim" : "interception";
+    const { winner, margin } = resolveContestDetailed([p, kicker], kind);
     if (winner === p) {
       if (margin >= DECISIVE_CONTEST_MARGIN) {
         return {
@@ -327,13 +393,60 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
   return { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
 }
 
+type SaveOutcome = { result: "goal" } | { result: "caught"; gk: Pawn } | { result: "parried"; gk: Pawn };
+
 /**
- * Resolves one full turn tick by tick. Invariant that must never break: no
- * two pawns may ever be closer than PAWN_COLLISION_RADIUS in any snapshot.
- * Pawns move continuously (any direction, real distance per tick) rather
- * than stepping cell-to-cell, so this is a proximity guarantee, not an
- * exact-cell one. Collisions are settled with a skill check; losers are
- * stopped for the rest of the turn.
+ * Whether a shot heading into the goal mouth at `crossingPoint` actually
+ * goes in, or the defending side's goalkeeper deals with it first. Purely
+ * geometric — takes only where/how high the ball crossed, nothing about the
+ * kick's declared intent — so a misdirected pass or a deflected loose ball
+ * drifting toward net gets exactly the same save attempt a deliberate shot
+ * would (see the three call sites in resolveTurn). If the defending side has
+ * no GK pawn at all, it's an automatic goal, same as today.
+ */
+function attemptSave(pawns: Pawn[], scoringSide: Side, crossingPoint: Vec2, height: number): SaveOutcome {
+  const defendingSide: Side = scoringSide === "home" ? "away" : "home";
+  const gk = pawns.find((p) => p.side === defendingSide && p.player.position === "GK");
+  if (!gk) return { result: "goal" };
+  const effectiveDistance = distance(gk.pos, crossingPoint) + height * GK_HEIGHT_DISTANCE_WEIGHT;
+  const roll = rollSaveAttempt(gk, effectiveDistance);
+  if (roll < SAVE_DIFFICULTY_THRESHOLD) return { result: "goal" };
+  if (roll - SAVE_DIFFICULTY_THRESHOLD >= DECISIVE_CONTEST_MARGIN) return { result: "caught", gk };
+  return { result: "parried", gk };
+}
+
+/**
+ * Where an off-the-ball goalkeeper with no explicit order this turn shadows
+ * to: shallow and anchored to the ball's row by default (gk_on_line and the
+ * no-stance default both resolve to this, aggressive=false), advancing
+ * further off the line toward the penalty-box depth the closer an incoming
+ * threat gets when aggressive=true (gk_aggressive stance).
+ */
+function gkAutoTarget(gk: Pawn, ballPos: Vec2, aggressive: boolean): Vec2 {
+  const targetY = Math.max(GOAL_ROW_MIN, Math.min(GOAL_ROW_MAX, ballPos.y));
+  const goalLineX = gk.side === "home" ? 0 : GRID_COLS;
+  const distFromGoalLine = Math.abs(ballPos.x - goalLineX);
+  let depth = GK_ANCHOR_DEPTH;
+  if (aggressive && distFromGoalLine <= GK_AGGRESSIVE_THREAT_RANGE) {
+    const closeness = 1 - distFromGoalLine / GK_AGGRESSIVE_THREAT_RANGE; // 0..1, 1 = ball right on the line
+    depth = GK_ANCHOR_DEPTH + (GK_PENALTY_DEPTH - GK_ANCHOR_DEPTH) * closeness;
+  }
+  return { x: gk.side === "home" ? depth : GRID_COLS - depth, y: targetY };
+}
+
+/**
+ * Resolves one full turn tick by tick. Invariant (relaxed for one case): no
+ * two pawns may ever be closer than PAWN_COLLISION_RADIUS in any snapshot,
+ * EXCEPT that a goalkeeper positioned within his own penalty box may end up
+ * closer than this to another pawn also converging there — modeling a
+ * goalmouth scramble rather than two solid bodies that can never overlap
+ * (see gkProtected below). Outside his own box the GK is a normal pawn,
+ * fully subject to the general invariant — this is what makes coming off
+ * his line for a claim (see checkCapture's gk_aggressive handling) carry a
+ * real positional cost. Pawns move continuously (any direction, real
+ * distance per tick) rather than stepping cell-to-cell, so this is a
+ * proximity guarantee, not an exact-cell one. Collisions are settled with a
+ * skill check; losers are stopped for the rest of the turn.
  *
  * The ball and pawn movement share this same tick loop rather than being two
  * sequential phases: a kicked ball is checked against every pawn's
@@ -368,6 +481,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   // nobody is there, the ball just sits still until someone reaches it.
   const carrier = current.find((p) => distance(p.pos, ball.pos) <= CAPTURE_RADIUS) ?? null;
   let ballPos: Vec2 = { ...ball.pos };
+  let ballHeight = 0;
   let flight: BallFlight | null = null;
   let roll: BallRoll | null = null;
   let currentCarrierId: string | null = carrier?.id ?? null;
@@ -386,7 +500,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     );
     // The kicker releases the ball and stays put; nobody else's plan changes.
     current = current.map((p) =>
-      p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null } : p
+      p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null, plannedKickLoft: false } : p
     );
     currentCarrierId = null;
   }
@@ -436,6 +550,18 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       });
     }
 
+    // GK auto-positioning: a keeper with no explicit order this turn
+    // shadows the ball's threat automatically, same "only re-aim pawns
+    // without an explicit plan" gate man-marking uses above. This is also
+    // what keeps ai.ts's AI-controlled GK sensible without touching ai.ts:
+    // ai.ts always sets an explicit plannedPos for its own GK every turn,
+    // so hasExplicitPlan is always true for it and this block simply never
+    // runs for an AI-controlled keeper.
+    for (const p of current) {
+      if (p.player.position !== "GK" || hasExplicitPlan.has(p.id)) continue;
+      destinations.set(p.id, gkAutoTarget(p, ballPos, p.stance?.kind === "gk_aggressive"));
+    }
+
     const preTickPos = new Map(current.map((p) => [p.id, p.pos]));
     // A "pressure"-stance pawn saps the effective speed of any opponent
     // currently within PRESSURE_RADIUS of it, checked against positions as
@@ -473,6 +599,16 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       current.find(
         (o) => o.id !== excludeId && !isMoving(o.id) && distance(preTickPos.get(o.id)!, pos) <= PAWN_COLLISION_RADIUS
       );
+    // A goalkeeper inside his own penalty box is exempt from the collision
+    // rules below AS A BLOCKED PARTY (real football protects a keeper from
+    // being barged/blocked in his own box) — he can still legitimately
+    // block others by standing still, that direction is unchanged. Checked
+    // against the START-of-tick position, same timing every other
+    // proximity check in this loop already uses.
+    const gkProtected = (id: string) => {
+      const p = current.find((c) => c.id === id)!;
+      return p.player.position === "GK" && withinPenaltyBox(preTickPos.get(id)!, p.side);
+    };
 
     // Settling one collision can create a new one (e.g. a pawn frozen by rule 3
     // becomes a hard block for someone else's path), so all three rules run
@@ -494,7 +630,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         // area, not really blocking) AND a separate stationary one, `.find`
         // could return the moving one first and wrongly conclude there's no
         // block at all, masking the real one.
-        let blocker = stationaryBlockerAt(intended.get(p.id)!, p.id);
+        let blocker = gkProtected(p.id) ? undefined : stationaryBlockerAt(intended.get(p.id)!, p.id);
         while (blocker) {
           const options = candidates.get(p.id)!;
           const nextIndex = candidateIndex.get(p.id)! + 1;
@@ -517,7 +653,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       // trade). Neither completes the crossing this tick; the loser is
       // stopped for good, the winner may try again on a later tick.
       for (const p of current) {
-        if (!isMoving(p.id) || stopped.has(p.id)) continue;
+        if (!isMoving(p.id) || stopped.has(p.id) || gkProtected(p.id)) continue;
         const dest = intended.get(p.id)!;
         // Same combined-predicate approach as Rule 1: search for a pawn that
         // satisfies the FULL swap condition (moving, not stopped, heading
@@ -531,6 +667,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
             o.id !== p.id &&
             isMoving(o.id) &&
             !stopped.has(o.id) &&
+            !gkProtected(o.id) &&
             distance(preTickPos.get(o.id)!, dest) <= PAWN_COLLISION_RADIUS &&
             distance(intended.get(o.id)!, preTickPos.get(p.id)!) <= PAWN_COLLISION_RADIUS
         );
@@ -553,7 +690,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       // small enough that this is a non-issue in practice) rather than an
       // exact-cell key, since "the same free cell" doesn't mean anything once
       // destinations are continuous.
-      const movingIds = current.filter((p) => isMoving(p.id)).map((p) => p.id);
+      const movingIds = current.filter((p) => isMoving(p.id) && !gkProtected(p.id)).map((p) => p.id);
       const grouped = new Set<string>();
       for (const id of movingIds) {
         if (grouped.has(id)) continue;
@@ -584,15 +721,51 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
 
     if (flight) {
       const tickStart = pointAlongFlight(flight);
+      const heightBeforeTick = heightAlongFlight(flight);
       flight.traveled = Math.min(flight.totalDist, flight.traveled + BALL_SPEED);
       const point = pointAlongFlight(flight);
-      const goal = goalCrossedAlong(tickStart, point);
-      if (goal) {
-        ballPos = point;
-        events.push(goal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
-        const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
-        snapshots.push({ pawns: frozen, ball: { ...ballPos }, events: takeNewEvents() });
-        return { snapshots, goal };
+      ballHeight = heightAlongFlight(flight);
+      // checkCapture sweeps the WHOLE segment covered this tick, not just its
+      // endpoint — so gating on the endpoint's height alone would wrongly
+      // allow a capture on the tick a descending ball crosses the reach
+      // threshold (high for most of the sweep, grounded only right at the
+      // end). Using the higher of the tick's start/end height gates the
+      // entire swept segment, not just where it lands.
+      const captureGateHeight = Math.max(heightBeforeTick, ballHeight);
+      const crossing = goalCrossing(tickStart, point);
+      if (crossing) {
+        const outcome = attemptSave(current, crossing.side, crossing.point, captureGateHeight);
+        if (outcome.result === "goal") {
+          ballPos = crossing.point;
+          events.push(crossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
+          const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+          snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+          return { snapshots, goal: crossing.side };
+        }
+        // Saved or parried: the flight ends here either way. Capture the
+        // flight's direction before nulling it (needed for the parry's
+        // deflection angle).
+        const flightDir = normalizeVec({ x: flight.to.x - flight.from.x, y: flight.to.y - flight.from.y });
+        flight = null;
+        if (outcome.result === "caught") {
+          currentCarrierId = outcome.gk.id;
+          lastControllingSide = outcome.gk.side;
+          ballPos = { ...outcome.gk.pos };
+          ballHeight = 0;
+          events.push(`${outcome.gk.player.name} saves it and gathers the ball!`);
+        } else {
+          const kicked = rotateVec(flightDir, (Math.random() * 2 - 1) * DEFLECTION_ANGLE_SPREAD);
+          roll = {
+            pos: crossing.point,
+            vx: kicked.x * DEFLECTION_SPEED,
+            vy: kicked.y * DEFLECTION_SPEED,
+            excludeId: outcome.gk.id,
+          };
+          ballPos = crossing.point;
+          events.push(`${outcome.gk.player.name} parries it away — loose ball!`);
+        }
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+        continue;
       }
 
       const clampedPoint = clampBallToBounds(point);
@@ -603,11 +776,17 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         currentCarrierId = null;
         ballPos = clampedPoint;
         events.push("The ball goes out of play");
-        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
         continue;
       }
 
-      const outcome = checkCapture(flight, tickStart, point, current);
+      // While the ball is above reach, nobody — teammate or opponent — can
+      // touch it; the flight just sails on overhead. This is the one seam a
+      // future header contest slots into (see BALL_REACH_HEIGHT).
+      const outcome =
+        captureGateHeight <= BALL_REACH_HEIGHT
+          ? checkCapture(flight, tickStart, point, current)
+          : { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
       ballPos = point;
       if (outcome.event) events.push(outcome.event);
 
@@ -621,7 +800,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         // Turnover: freeze everything else right here, mid-turn.
         flight = null;
         currentCarrierId = outcome.interceptedBy.id;
-        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
         break;
       } else if (outcome.deflectedAt) {
         // Contested but not cleanly won — the ball comes off this challenge
@@ -646,18 +825,46 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         roll = { pos: point, vx: dir.x * ROLL_START_SPEED, vy: dir.y * ROLL_START_SPEED };
       }
     } else if (roll) {
+      // A loose ball on the ground — always grounded, whether it just
+      // bounced down off a lofted flight or came off a deflection/tackle.
+      ballHeight = 0;
       const rollFrom = { ...roll.pos };
       roll.pos = { x: roll.pos.x + roll.vx, y: roll.pos.y + roll.vy };
       roll.vx *= ROLL_FRICTION;
       roll.vy *= ROLL_FRICTION;
       ballPos = roll.pos;
 
-      const rollGoal = goalCrossedAlong(rollFrom, ballPos);
-      if (rollGoal) {
-        events.push(rollGoal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
-        const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
-        snapshots.push({ pawns: frozen, ball: { ...ballPos }, events: takeNewEvents() });
-        return { snapshots, goal: rollGoal };
+      const rollCrossing = goalCrossing(rollFrom, ballPos);
+      if (rollCrossing) {
+        // Purely geometric, same as the flight-branch hook above — a
+        // deflected/scrappy ball drifting toward net gets exactly the same
+        // save attempt a deliberate shot would, not a free pass.
+        const outcome = attemptSave(current, rollCrossing.side, rollCrossing.point, 0);
+        if (outcome.result === "goal") {
+          events.push(rollCrossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
+          const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+          snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+          return { snapshots, goal: rollCrossing.side };
+        }
+        roll = null;
+        if (outcome.result === "caught") {
+          currentCarrierId = outcome.gk.id;
+          lastControllingSide = outcome.gk.side;
+          ballPos = { ...outcome.gk.pos };
+          events.push(`${outcome.gk.player.name} gathers the loose ball off the line!`);
+        } else {
+          const angle = Math.random() * 2 * Math.PI;
+          roll = {
+            pos: rollCrossing.point,
+            vx: Math.cos(angle) * DEFLECTION_SPEED,
+            vy: Math.sin(angle) * DEFLECTION_SPEED,
+            excludeId: outcome.gk.id,
+          };
+          ballPos = rollCrossing.point;
+          events.push(`${outcome.gk.player.name} keeps it out — loose ball!`);
+        }
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+        continue;
       }
 
       const clampedRollPos = clampBallToBounds(ballPos);
@@ -666,7 +873,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         currentCarrierId = null;
         ballPos = clampedRollPos;
         events.push("The ball goes out of play");
-        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
         continue;
       }
 
@@ -682,7 +889,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         lastControllingSide = winner.side;
         events.push(`${winner.player.name} gets to the loose ball`);
         if (turnover) {
-          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
+          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
           break;
         }
       } else if (Math.hypot(roll.vx, roll.vy) < ROLL_STOP_EPS) {
@@ -697,6 +904,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       const holder = current.find((p) => p.id === currentCarrierId);
       if (holder) {
         ballPos = { ...holder.pos };
+        ballHeight = 0;
 
         // Tackling: a dribbling carrier can be challenged for the ball, not
         // just a kicked one. Without this, a carrier who never kicks is
@@ -722,7 +930,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
               lastControllingSide = challenger.side;
               ballPos = { ...challenger.pos };
               events.push(`Tackle: ${challenger.player.name} takes the ball off ${holder.player.name}`);
-              snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
+              snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
               break;
             }
             // Not decisive — the ball squirts loose rather than cleanly
@@ -742,6 +950,28 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           } else {
             tackleAttempted.add(challenger.id);
           }
+        }
+      }
+    } else {
+      // The ball is sitting idle: never kicked this turn, no residual roll,
+      // nobody currently carrying it. Without this check, a pawn that walks
+      // onto a stationary ball mid-turn wouldn't actually gain control of it
+      // until the FOLLOWING turn's start-of-turn carrier lookup — which
+      // plays out as walking right through the ball and having it just sit
+      // there. Mirrors the roll branch's claimant logic, but for a ball that
+      // was never in motion this turn.
+      const claimants = current.filter((p) => distance(p.pos, ballPos) <= CAPTURE_RADIUS);
+      if (claimants.length > 0) {
+        const winner = claimants.length === 1 ? claimants[0] : resolveContest(claimants, "loose_ball");
+        const turnover = lastControllingSide !== null && winner.side !== lastControllingSide;
+        currentCarrierId = winner.id;
+        ballPos = { ...winner.pos };
+        ballHeight = 0;
+        lastControllingSide = winner.side;
+        events.push(`${winner.player.name} picks up the ball`);
+        if (turnover) {
+          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+          break;
         }
       }
     }
@@ -764,15 +994,26 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       }
     }
 
-    snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, events: takeNewEvents() });
+    snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
   }
 
-  const goal = goalScoredAt(ballPos);
-  if (goal) {
-    events.push(goal === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
+  // A dribbling carrier walking the ball into the goal mouth isn't checked
+  // by either hook above (there's no goal check inside the currentCarrierId
+  // tick branch) — only here, at the very end. Gated the same as the other
+  // two, for the same "every path a goal can be scored through" reason.
+  const finalGoalSide = goalScoredAt(ballPos);
+  if (finalGoalSide) {
+    const outcome = attemptSave(current, finalGoalSide, ballPos, ballHeight);
     const last = snapshots[snapshots.length - 1];
+    if (outcome.result === "goal") {
+      events.push(finalGoalSide === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
+      if (last) last.events.push(...takeNewEvents());
+      return { snapshots, goal: finalGoalSide };
+    }
+    events.push(`${outcome.gk.player.name} denies it right on the line!`);
     if (last) last.events.push(...takeNewEvents());
+    return { snapshots, goal: null };
   }
 
-  return { snapshots, goal };
+  return { snapshots, goal: null };
 }

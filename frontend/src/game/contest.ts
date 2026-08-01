@@ -1,4 +1,8 @@
 import {
+  GK_MIN_REACH_FACTOR,
+  GK_REACH_FALLOFF_RANGE,
+  GK_STRETCH_RANGE_BASE,
+  GK_STRETCH_RANGE_PER_JUMPING,
   STANCE_AGGRESSIVE_PACE_FACTOR,
   STANCE_COVER_PASSING_SKILL_FACTOR,
   STANCE_MAN_MARK_PACE_FACTOR,
@@ -16,13 +20,15 @@ import type { Pawn } from "./types";
  * duel, a shot vs. a goalkeeper) means adding a table entry here, not
  * touching the resolution loop that calls into this.
  */
-export type ContestKind = "loose_ball" | "interception" | "tackle";
+export type ContestKind = "loose_ball" | "interception" | "tackle" | "gk_claim" | "save";
 
-interface AttributeWeights {
-  skill: number;
-  pace: number;
-  stamina: number;
-}
+// A partial map rather than a fixed {skill,pace,stamina} interface — the
+// growing attribute surface (jumping/shot_stopping/reflexes added for the
+// goalkeeper) means different contest kinds legitimately care about
+// different subsets of attributes, not just different weights on the same
+// fixed three.
+type ContestAttribute = "skill" | "pace" | "stamina" | "jumping" | "shot_stopping" | "reflexes";
+type AttributeWeights = Partial<Record<ContestAttribute, number>>;
 
 const WEIGHTS: Record<ContestKind, AttributeWeights> = {
   // Two pawns physically racing/jostling for the same cell or a loose ball:
@@ -38,6 +44,16 @@ const WEIGHTS: Record<ContestKind, AttributeWeights> = {
   // more here than it does for reading a pass, since the carrier is
   // actively moving away/around the challenger.
   tackle: { skill: 0.6, pace: 0.3, stamina: 0.1 },
+  // A goalkeeper proactively coming out to claim an incoming cross/pass
+  // (gk_aggressive stance only, see checkCapture in resolve.ts) — reading
+  // the flight and getting across it, with pace to actually close the
+  // ground before it arrives.
+  gk_claim: { shot_stopping: 0.3, reflexes: 0.3, skill: 0.25, pace: 0.15 },
+  // Stopping a shot that's already threatening goal — shot_stopping
+  // dominates, reflexes a real but smaller factor, skill (positioning/
+  // game-reading) a minor one. No jumping entry here — see reachFactor
+  // below for why.
+  save: { shot_stopping: 0.55, reflexes: 0.3, skill: 0.15 },
 };
 
 const RANDOM_SPREAD = 30; // roll gets +/- half of this, i.e. +/-15
@@ -73,14 +89,46 @@ function stanceBonus(pawn: Pawn, against: Pawn | null, kind: ContestKind): numbe
 
 function rollFor(pawn: Pawn, kind: ContestKind, against: Pawn | null): number {
   const w = WEIGHTS[kind];
-  const { skill, pace, stamina } = pawn.player;
-  return (
-    skill * w.skill +
-    pace * w.pace +
-    stamina * w.stamina +
-    stanceBonus(pawn, against, kind) +
-    (Math.random() * RANDOM_SPREAD - RANDOM_SPREAD / 2)
-  );
+  let base = 0;
+  for (const attr of Object.keys(w) as ContestAttribute[]) {
+    base += pawn.player[attr] * (w[attr] ?? 0);
+  }
+  return base + stanceBonus(pawn, against, kind) + (Math.random() * RANDOM_SPREAD - RANDOM_SPREAD / 2);
+}
+
+/**
+ * How much of a keeper's shot_stopping/reflexes potential is usable for THIS
+ * save attempt, based on how far the threat point is from a comfortable,
+ * central position. jumping is deliberately NOT a WEIGHTS.save entry above —
+ * an additive term scaling with distance would let a maxed-jumping keeper
+ * dominate every roll regardless of distance. Instead jumping only extends
+ * the full-effectiveness range outward; beyond that, effectiveness falls off
+ * linearly to a floor rather than to 0 — even a near-impossible stretch
+ * keeps a sliver of a chance.
+ */
+function reachFactor(gk: Pawn, effectiveDistance: number): number {
+  const stretchRange = GK_STRETCH_RANGE_BASE + gk.player.jumping * GK_STRETCH_RANGE_PER_JUMPING;
+  if (effectiveDistance <= stretchRange) return 1;
+  const over = effectiveDistance - stretchRange;
+  return Math.max(GK_MIN_REACH_FACTOR, 1 - over / GK_REACH_FALLOFF_RANGE);
+}
+
+/**
+ * A "save" roll gated by reachFactor — scales only shot_stopping/reflexes
+ * (the attributes that represent actually reaching the ball), not the
+ * pawn's whole attribute set, since skill isn't a "reach" attribute.
+ */
+export function rollSaveAttempt(gk: Pawn, effectiveDistance: number): number {
+  const factor = reachFactor(gk, effectiveDistance);
+  const scaled: Pawn = {
+    ...gk,
+    player: {
+      ...gk.player,
+      shot_stopping: gk.player.shot_stopping * factor,
+      reflexes: gk.player.reflexes * factor,
+    },
+  };
+  return rollFor(scaled, "save", null);
 }
 
 export interface ContestOutcome {

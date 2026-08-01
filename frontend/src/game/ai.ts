@@ -96,7 +96,7 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
 
     if (carrier && pawn.id === carrier.id) {
       if (dist(pawn.pos, goalNet) <= KICK_RANGE && hasClearLane(pawn.pos, goalNet, opponents)) {
-        return { ...pawn, plannedKick: goalNet, plannedPos: null };
+        return { ...pawn, plannedKick: goalNet, plannedPos: null, plannedKickLoft: false };
       }
 
       const passTarget = teammates
@@ -106,7 +106,7 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
         .sort((a, b) => dist(a.pos, goalLine) - dist(b.pos, goalLine))[0];
 
       if (passTarget) {
-        return { ...pawn, plannedKick: passTarget.pos, plannedPos: null };
+        return { ...pawn, plannedKick: passTarget.pos, plannedPos: null, plannedKickLoft: false };
       }
 
       return { ...pawn, plannedPos: moveToward(pawn.pos, goalLine, PAWN_MOVE_BUDGET), plannedKick: null };

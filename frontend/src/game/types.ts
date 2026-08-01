@@ -7,6 +7,9 @@ export interface PlayerDTO {
   pace: number;
   stamina: number;
   skill: number;
+  jumping: number;
+  shot_stopping: number;
+  reflexes: number;
 }
 
 export interface TeamDTO {
@@ -27,12 +30,21 @@ export type Side = "home" | "away";
  * a stance. Left open to future variants (offensive stances, a header-bonus
  * stance once crossing/heights exist) rather than closed off, but only
  * variants with a real mechanic to attach to belong here.
+ *
+ * gk_on_line/gk_aggressive are GK-only (enforced at the UI level, not the
+ * type level — the same limitation man_mark already has: nothing stops an
+ * outfield pawn from being assigned one). Deliberately not reusing the
+ * "aggressive" literal for the GK variant — contest.ts's stanceBonus already
+ * keys off kind === "aggressive" for an outfield tackle bonus, and a name
+ * collision would risk a GK tripping that branch.
  */
 export type Stance =
   | { kind: "aggressive" }
   | { kind: "pressure" }
   | { kind: "cover_passing" }
-  | { kind: "man_mark"; targetId: string };
+  | { kind: "man_mark"; targetId: string }
+  | { kind: "gk_on_line" }
+  | { kind: "gk_aggressive" };
 
 export interface Pawn {
   id: string;
@@ -42,6 +54,8 @@ export interface Pawn {
   plannedPos: Vec2 | null;
   /** Set instead of plannedPos when this pawn (must be the ball carrier) kicks/passes this turn. */
   plannedKick: Vec2 | null;
+  /** Only meaningful when plannedKick !== null: whether this kick is a lofted (airborne) trajectory rather than grounded. Turn-scoped like plannedKick — set alongside it, reset alongside it. */
+  plannedKickLoft: boolean;
   stance: Stance | null;
   /** This turn's choice to sprint — turn-scoped like plannedPos/plannedKick/stance. */
   plannedSprint: boolean;
