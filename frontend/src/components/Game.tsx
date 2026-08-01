@@ -59,6 +59,19 @@ function eventClass(e: string): string {
   return "";
 }
 
+const STANCE_OPTIONS: { key: "none" | "aggressive" | "pressure" | "cover_passing" | "man_mark"; label: string }[] = [
+  { key: "none", label: "None" },
+  { key: "aggressive", label: "Aggressive" },
+  { key: "pressure", label: "Pressure" },
+  { key: "cover_passing", label: "Cover passing" },
+  { key: "man_mark", label: "Man-mark" },
+];
+
+function stanceLabel(stance: Stance | null): string {
+  const opt = STANCE_OPTIONS.find((o) => o.key === (stance?.kind ?? "none"));
+  return opt?.label ?? "None";
+}
+
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
   const homePlayers = pawns.filter((p) => p.side === "home").map((p) => p.player);
   const awayPlayers = pawns.filter((p) => p.side === "away").map((p) => p.player);
@@ -108,6 +121,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   const [ball, setBall] = useState<Ball>({ pos: BALL_START });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
+  const [stanceMenuOpen, setStanceMenuOpen] = useState(false);
   // True while the player has picked "Man-mark" for the selected pawn and
   // is now expected to click an opponent pawn instead of a cell/destination.
   const [pickingMarkTarget, setPickingMarkTarget] = useState(false);
@@ -268,6 +282,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (pawn.side !== controllingSide) return;
     setKickMode(false);
     setPickingMarkTarget(false);
+    setStanceMenuOpen(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
   }
 
@@ -303,6 +318,16 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (!selectedPawn) return;
     setPawns((prev) => prev.map((p) => (p.id === selectedPawn.id ? { ...p, stance } : p)));
     setPickingMarkTarget(false);
+  }
+
+  /** Handles a click on one of the stance dropdown's options. Man-mark needs a target pawn picked next, so it doesn't set the stance directly. */
+  function handleStanceOptionClick(key: (typeof STANCE_OPTIONS)[number]["key"]) {
+    setStanceMenuOpen(false);
+    if (key === "man_mark") {
+      setPickingMarkTarget(true);
+      return;
+    }
+    handleSetStance(key === "none" ? null : { kind: key });
   }
 
   /** Toggles the selected pawn's sprint order for this turn. Turning it off is always allowed; turning it on requires the cooldown to be clear. */
@@ -459,28 +484,130 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   return (
     <div className="game-wrapper" ref={wrapperRef}>
-      <div className="game-header">
-        <button type="button" className="exit-button" onClick={onExitToMenu}>
-          ← Menu
-        </button>
-        <button type="button" className="exit-button" onClick={toggleFullscreen}>
-          {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-        </button>
-        <h1>
-          {teams[0]?.name} <span className="score">{homeScore}</span>
-          <span className="vs">x</span>
-          <span className="score">{awayScore}</span> {teams[1]?.name}
-        </h1>
-        <div className="game-info">
-          <span>Turn {turn}</span>
-          <button type="button" onClick={handleReady} disabled={resolving}>
-            {resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
-          </button>
+      <div className="hud">
+        <div className="hud-top-row">
+          <div className="hud-top-left">
+            {selectedPawn ? (
+              <div className="hud-panel pawn-info">
+                <div className="pawn-info-name">
+                  #{selectedPawn.player.jersey_number} {selectedPawn.player.name}
+                </div>
+                <div className="pawn-info-row">Stance: {stanceLabel(selectedPawn.stance)}</div>
+                <div className="pawn-info-row">
+                  Sprint:{" "}
+                  {selectedPawn.plannedSprint
+                    ? "Sprinting"
+                    : selectedPawn.sprintCooldown > 0
+                      ? `Cooldown (${selectedPawn.sprintCooldown})`
+                      : "Ready"}
+                </div>
+              </div>
+            ) : (
+              <div className="hud-panel pawn-info pawn-info-empty">No pawn selected</div>
+            )}
+          </div>
+
+          <div className="hud-top-center">
+            <div className="hud-panel scoreboard">
+              <span className="team-name">{teams[0]?.name}</span>
+              <span className="score">{homeScore}</span>
+              <span className="vs">x</span>
+              <span className="score">{awayScore}</span>
+              <span className="team-name">{teams[1]?.name}</span>
+            </div>
+            <div className="turn-line">
+              Turn {turn}
+              {mode === "hotseat" && (
+                <span className={`turn-indicator ${controllingSide}`}> — {controllingSideName}'s turn</span>
+              )}
+            </div>
+            {pickingMarkTarget && <div className="hud-banner">Click an opponent pawn to mark.</div>}
+          </div>
+
+          <div className="hud-top-right">
+            <button type="button" className="exit-button hud-menu-btn" onClick={onExitToMenu}>
+              ← Menu
+            </button>
+            <button type="button" className="exit-button hud-menu-btn" onClick={toggleFullscreen}>
+              {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            </button>
+            <button type="button" className="continue-button" onClick={handleReady} disabled={resolving}>
+              {resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
+            </button>
+          </div>
+        </div>
+
+        <div className="hud-bottom-row">
+          <div className="hud-bottom-left">
+            <div className="hud-panel events-log-panel">
+              <div className="events-log-title">Events</div>
+              <ul className={`events-log ${events.length > 0 ? "" : "empty"}`}>
+                {events.map((e, i) => (
+                  <li key={i} className={eventClass(e)}>
+                    {e}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="hud-bottom-right">
+            {selectedPawn && (
+              <div className="hud-panel action-panel">
+                <div className="action-row">
+                  <button type="button" className={!kickMode ? "active" : ""} onClick={() => setKickMode(false)}>
+                    Move
+                  </button>
+                  <button
+                    type="button"
+                    className={kickMode ? "active" : ""}
+                    disabled={!selectedIsCarrier}
+                    onClick={() => setKickMode(true)}
+                  >
+                    Kick
+                  </button>
+                </div>
+                <div className="action-row stance-row">
+                  <button
+                    type="button"
+                    className={`stance-toggle ${stanceMenuOpen ? "active" : ""}`}
+                    onClick={() => setStanceMenuOpen((o) => !o)}
+                  >
+                    Stance: {stanceLabel(selectedPawn.stance)} {stanceMenuOpen ? "▲" : "▼"}
+                  </button>
+                  {stanceMenuOpen && (
+                    <div className="stance-menu">
+                      {STANCE_OPTIONS.map((opt) => (
+                        <button
+                          type="button"
+                          key={opt.key}
+                          className={(selectedPawn.stance?.kind ?? "none") === opt.key ? "active" : ""}
+                          onClick={() => handleStanceOptionClick(opt.key)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="action-row">
+                  <button
+                    type="button"
+                    className={selectedPawn.plannedSprint ? "active" : ""}
+                    disabled={!selectedPawn.plannedSprint && selectedPawn.sprintCooldown > 0}
+                    onClick={handleToggleSprint}
+                  >
+                    {selectedPawn.sprintCooldown > 0 && !selectedPawn.plannedSprint
+                      ? `Sprint (${selectedPawn.sprintCooldown})`
+                      : "Sprint"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      {mode === "hotseat" && (
-        <p className={`turn-indicator ${controllingSide}`}>Turn: {controllingSideName}</p>
-      )}
+
       {mode === "ai" ? (
         <p className="hint">
           Click a blue pawn, then a highlighted cell to plan its move. Whoever is standing on the
@@ -500,88 +627,6 @@ export function Game({ mode, onExitToMenu }: Props) {
           the other team can't see your moves until resolution.
         </p>
       )}
-      {pickingMarkTarget && <p className="hint">Click an opponent pawn to mark.</p>}
-      {selectedIsCarrier && (
-        <div className="kick-toggle">
-          <span>Pawn with the ball — choose an action:</span>
-          <button
-            type="button"
-            className={kickMode ? "" : "active"}
-            onClick={() => setKickMode(false)}
-          >
-            Move
-          </button>
-          <button
-            type="button"
-            className={kickMode ? "active" : ""}
-            onClick={() => setKickMode(true)}
-          >
-            Kick
-          </button>
-        </div>
-      )}
-      {selectedPawn && !selectedIsCarrier && (
-        <div className="kick-toggle">
-          <span>Off-ball pawn — set a stance:</span>
-          <button
-            type="button"
-            className={selectedPawn.stance === null ? "active" : ""}
-            onClick={() => handleSetStance(null)}
-          >
-            None
-          </button>
-          <button
-            type="button"
-            className={selectedPawn.stance?.kind === "aggressive" ? "active" : ""}
-            onClick={() => handleSetStance({ kind: "aggressive" })}
-          >
-            Aggressive
-          </button>
-          <button
-            type="button"
-            className={selectedPawn.stance?.kind === "pressure" ? "active" : ""}
-            onClick={() => handleSetStance({ kind: "pressure" })}
-          >
-            Pressure
-          </button>
-          <button
-            type="button"
-            className={selectedPawn.stance?.kind === "cover_passing" ? "active" : ""}
-            onClick={() => handleSetStance({ kind: "cover_passing" })}
-          >
-            Cover passing
-          </button>
-          <button
-            type="button"
-            className={pickingMarkTarget || selectedPawn.stance?.kind === "man_mark" ? "active" : ""}
-            onClick={() => setPickingMarkTarget(true)}
-          >
-            Man-mark
-          </button>
-        </div>
-      )}
-      {selectedPawn && (
-        <div className="kick-toggle">
-          <span>Sprint — covers more ground this turn, then cools down:</span>
-          <button
-            type="button"
-            className={selectedPawn.plannedSprint ? "active" : ""}
-            disabled={!selectedPawn.plannedSprint && selectedPawn.sprintCooldown > 0}
-            onClick={handleToggleSprint}
-          >
-            {selectedPawn.sprintCooldown > 0 && !selectedPawn.plannedSprint
-              ? `Sprint (${selectedPawn.sprintCooldown})`
-              : "Sprint"}
-          </button>
-        </div>
-      )}
-      <ul className={`events-log ${events.length > 0 ? "" : "empty"}`}>
-        {events.map((e, i) => (
-          <li key={i} className={eventClass(e)}>
-            {e}
-          </li>
-        ))}
-      </ul>
       <p className="camera-hint">
         Mouse wheel: zoom. Middle (or side) button + drag horizontally: rotate the camera.
         Drag vertically: adjust the tilt. WASD: pan around the pitch.
@@ -604,9 +649,11 @@ export function Game({ mode, onExitToMenu }: Props) {
         camera.tilt !== TILT_DEFAULT ||
         camera.panX !== 0 ||
         camera.panY !== 0) && (
-        <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
-          Reset camera
-        </button>
+        <div className="camera-reset-wrap">
+          <button type="button" className="exit-button camera-reset" onClick={resetCamera}>
+            Reset camera
+          </button>
+        </div>
       )}
     </div>
   );

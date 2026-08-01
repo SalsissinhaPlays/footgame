@@ -12,12 +12,14 @@
   background: #10140f;
   position: relative;
   overflow: hidden;
+  padding: 0;
 }
 
 /* The field takes the entire screen; every other control is an absolutely
-   positioned overlay floating on top of it (see below), rather than sharing
-   space in a flex layout — that's what was shrinking the playable area and
-   letting camera angles push pitch content up behind the header before. */
+   positioned HUD overlay floating on top of it (see below), rather than
+   sharing space in a flex layout — that's what was shrinking the playable
+   area and letting camera angles push pitch content up behind the header
+   before. */
 .game-wrapper:fullscreen .field-viewport {
   position: absolute;
   inset: 0;
@@ -32,69 +34,179 @@
   display: none;
 }
 
-.game-wrapper:fullscreen .game-header,
-.game-wrapper:fullscreen .turn-indicator,
-.game-wrapper:fullscreen .kick-toggle,
-.game-wrapper:fullscreen .events-log,
-.game-wrapper:fullscreen .camera-reset {
+/* ---------- HUD layout ----------
+   Five zones: top-left (selected pawn), top-center (scoreboard/turn),
+   top-right (Continue + primary controls), bottom-left (event log),
+   bottom-right (action buttons). In fullscreen this becomes an absolute
+   overlay on top of the pitch; in windowed mode it's just normal-flow
+   content stacked above the field. */
+
+.hud {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hud-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hud-top-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.hud-top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-bottom-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.game-wrapper:fullscreen .hud {
   position: absolute;
+  inset: 16px;
   z-index: 5;
-  background: transparent;
-  margin: 0;
+  justify-content: space-between;
+  pointer-events: none;
 }
 
-.game-wrapper:fullscreen .game-header {
-  top: 16px;
-  left: 16px;
-  right: 16px;
+.game-wrapper:fullscreen .hud-top-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
 }
 
-/* Text floating directly over the pitch needs a shadow to stay legible
-   against grass of any shade, since there's no solid bar behind it anymore. */
-.game-wrapper:fullscreen .game-header h1,
-.game-wrapper:fullscreen .game-info span,
-.game-wrapper:fullscreen .turn-indicator,
-.game-wrapper:fullscreen .kick-toggle span {
+.game-wrapper:fullscreen .hud-top-left {
+  justify-self: start;
+}
+
+.game-wrapper:fullscreen .hud-top-center {
+  justify-self: center;
+}
+
+.game-wrapper:fullscreen .hud-top-right {
+  justify-self: end;
+}
+
+.game-wrapper:fullscreen .hud-bottom-row {
+  align-items: flex-end;
+}
+
+/* The HUD shell itself ignores clicks (so the pitch beneath stays
+   interactive), but every actual panel opts back in. */
+.game-wrapper:fullscreen .hud-top-left,
+.game-wrapper:fullscreen .hud-top-right,
+.game-wrapper:fullscreen .hud-bottom-left,
+.game-wrapper:fullscreen .hud-bottom-right {
+  pointer-events: auto;
+}
+
+.game-wrapper:fullscreen .hud-menu-btn {
+  display: none;
+}
+
+/* ---------- Shared panel chrome ---------- */
+
+.hud-panel {
+  background: rgba(12, 22, 12, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: #f2f2f2;
+  backdrop-filter: blur(2px);
+}
+
+/* ---------- Top left: selected pawn info ---------- */
+
+.pawn-info {
+  padding: 8px 14px;
+  font-size: 13px;
+  min-width: 170px;
+}
+
+.pawn-info-empty {
+  color: #aaa;
+  font-style: italic;
+}
+
+.pawn-info-name {
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.pawn-info-row {
+  opacity: 0.9;
+}
+
+/* ---------- Top center: scoreboard ---------- */
+
+.scoreboard {
+  padding: 8px 22px;
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.team-name {
+  font-size: 15px;
+}
+
+.vs {
+  opacity: 0.7;
+  font-weight: 400;
+  margin: 0 2px;
+}
+
+.score {
+  color: #7fd0ff;
+}
+
+.turn-line {
+  font-size: 12px;
+  color: #ddd;
   text-shadow:
     0 1px 4px rgba(0, 0, 0, 0.85),
     0 0 2px rgba(0, 0, 0, 0.6);
 }
 
-.game-wrapper:fullscreen .turn-indicator {
-  top: 74px;
-  left: 50%;
-  transform: translateX(-50%);
+.turn-indicator.home {
+  color: #64b5f6;
+  font-weight: 700;
 }
 
-.game-wrapper:fullscreen .kick-toggle {
-  bottom: 70px;
-  left: 50%;
-  transform: translateX(-50%);
+.turn-indicator.away {
+  color: #ef9a9a;
+  font-weight: 700;
 }
 
-.game-wrapper:fullscreen .events-log {
-  top: 110px;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 480px;
+.hud-banner {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #ffd54f;
+  text-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.85),
+    0 0 2px rgba(0, 0, 0, 0.6);
 }
 
-.game-wrapper:fullscreen .events-log.empty {
-  display: none;
-}
-
-.game-wrapper:fullscreen .camera-reset {
-  bottom: 16px;
-  left: 16px;
-}
-
-.game-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-}
+/* ---------- Top right: primary controls ---------- */
 
 .exit-button {
   padding: 6px 12px;
@@ -106,19 +218,205 @@
   cursor: pointer;
 }
 
-.turn-indicator {
+.continue-button {
+  padding: 9px 20px;
   font-size: 14px;
   font-weight: 700;
-  margin: 4px 0;
+  border-radius: 6px;
+  border: none;
+  background: #2e7d32;
+  color: white;
+  cursor: pointer;
 }
 
-.turn-indicator.home {
-  color: #1565c0;
+.continue-button:hover {
+  background: #266529;
 }
 
-.turn-indicator.away {
-  color: #c62828;
+.continue-button:disabled {
+  background: #666;
+  cursor: default;
 }
+
+/* ---------- Bottom left: event log ---------- */
+
+.events-log-panel {
+  padding: 8px 10px;
+  width: 320px;
+  max-width: 46vw;
+  box-sizing: border-box;
+}
+
+.events-log-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.events-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  max-height: 160px;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.events-log li {
+  padding: 2px 0;
+}
+
+.events-log.empty::after {
+  content: "No events yet.";
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.events-log .event-goal {
+  color: #ffd54f;
+  font-weight: 700;
+}
+
+.events-log .event-turnover {
+  color: #ef5350;
+  font-weight: 600;
+}
+
+.events-log .event-contested {
+  color: #ffb74d;
+  font-weight: 600;
+}
+
+.events-log .event-pass {
+  color: #81c784;
+}
+
+.events-log .event-miss {
+  color: #bbb;
+}
+
+/* ---------- Bottom right: action buttons ---------- */
+
+.action-panel {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 210px;
+}
+
+.action-row {
+  display: flex;
+  gap: 6px;
+  position: relative;
+}
+
+.action-row button {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.action-row button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.action-row button.active {
+  background: #ef6c00;
+  border-color: #ef6c00;
+  color: white;
+}
+
+.stance-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.stance-toggle {
+  width: 100%;
+  text-align: left;
+}
+
+/* Collapsible stance selector — opens upward so it never gets clipped by
+   the bottom edge of the screen. */
+.stance-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(10, 18, 10, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 6px;
+  z-index: 6;
+}
+
+.stance-menu button {
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stance-menu button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.stance-menu button.active {
+  background: #ef6c00;
+  color: white;
+}
+
+/* ---------- Camera reset ---------- */
+
+.camera-reset-wrap {
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+/* Lower-middle, small and low-opacity, so it doesn't compete with the pitch
+   or the action panel next to it — only appears once the camera has
+   actually been moved from its default. */
+.game-wrapper:fullscreen .camera-reset-wrap {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  margin: 0;
+}
+
+.game-wrapper:fullscreen .camera-reset-wrap button {
+  opacity: 0.5;
+  font-size: 11px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.game-wrapper:fullscreen .camera-reset-wrap button:hover {
+  opacity: 1;
+}
+
+/* ---------- Misc ---------- */
 
 .handoff-screen {
   text-align: center;
@@ -135,120 +433,6 @@
   background: #2e7d32;
   color: white;
   cursor: pointer;
-}
-
-.game-header h1 {
-  font-size: 22px;
-  margin: 0;
-}
-
-.vs {
-  color: #888;
-  font-weight: normal;
-  margin: 0 6px;
-}
-
-.score {
-  color: #1565c0;
-  margin: 0 6px;
-}
-
-.kick-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #444;
-  margin-bottom: 10px;
-}
-
-.kick-toggle button {
-  padding: 5px 14px;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: 5px;
-  border: 1px solid #999;
-  background: white;
-  cursor: pointer;
-}
-
-.kick-toggle button.active {
-  background: #ef6c00;
-  border-color: #ef6c00;
-  color: white;
-}
-
-.game-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-weight: 600;
-}
-
-.game-info button {
-  padding: 8px 18px;
-  font-size: 15px;
-  font-weight: 600;
-  border-radius: 6px;
-  border: none;
-  background: #2e7d32;
-  color: white;
-  cursor: pointer;
-}
-
-.game-info button:hover {
-  background: #266529;
-}
-
-.game-info button:disabled {
-  background: #666;
-  cursor: default;
-}
-
-.events-log {
-  margin: 0 0 12px;
-  padding: 10px 16px;
-  background: #fff8e1;
-  border: 1px solid #ffe082;
-  border-radius: 6px;
-  font-size: 13px;
-  color: #5d4a00;
-  text-align: left;
-  min-height: 52px;
-  box-sizing: border-box;
-  list-style: none;
-}
-
-/* Reserves the same space when there's nothing to show yet, so the field
-   below never jumps when events appear/disappear between turns. */
-.events-log.empty {
-  background: transparent;
-  border-color: transparent;
-}
-
-/* Category coloring so the log is scannable at a glance — shape/color
-   before you even read the words. */
-.events-log .event-goal {
-  color: #b8860b;
-  font-weight: 700;
-}
-
-.events-log .event-turnover {
-  color: #c62828;
-  font-weight: 600;
-}
-
-.events-log .event-contested {
-  color: #ef6c00;
-  font-weight: 600;
-}
-
-.events-log .event-pass {
-  color: #2e7d32;
-}
-
-.events-log .event-miss {
-  color: #8d8d8d;
 }
 
 .hint {
@@ -280,10 +464,6 @@
   width: 100%;
   height: 100%;
   display: block;
-}
-
-.camera-reset {
-  margin-bottom: 10px;
 }
 
 .camera-hint {
