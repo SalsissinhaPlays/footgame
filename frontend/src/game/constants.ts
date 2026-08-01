@@ -73,6 +73,41 @@ export const LOFT_APEX_MAX = 6; // meters — cap for a max-range KICK_RANGE cro
 // add header-specific logic here, just keep this threshold honest.
 export const BALL_REACH_HEIGHT = 2.2;
 
+// Height, in meters, above which a descending ball becomes headable instead
+// of fully untouchable — the second half of the seam BALL_REACH_HEIGHT's own
+// doc comment describes. Between BALL_REACH_HEIGHT and this, checkHeader
+// runs instead of checkCapture; above this, still fully untouchable (a
+// well-lofted cross's peak stays uncontestable, only becoming headable as it
+// descends — matches real crossing/heading play). ~3.2m comfortably covers a
+// realistic jump+reach header height while staying well under LOFT_APEX_MAX
+// (6m).
+export const HEADER_REACH_HEIGHT = 3.2;
+
+// How close a pawn must be to the ball's swept segment to contest a header —
+// larger than CAPTURE_RADIUS (1.2): heading involves jumping/reaching with
+// the head, more generous than trapping a grounded ball at the feet.
+// Comparable to TACKLE_RADIUS (1.7), same "body reaching in" scale.
+export const HEADER_RADIUS = 1.6;
+
+// Baseline roll an UNCONTESTED header (exactly one eligible pawn — see
+// checkHeader) must clear; a 2+-pawn header is a genuine
+// resolveContestDetailed contest instead and doesn't use this. WEIGHTS.header
+// (contest.ts) sums to 1.0 and RANDOM_SPREAD gives +/-15 noise, so a pawn
+// whose weighted jumping/skill/pace average is X rolls X +/-15. At 36: an
+// average pawn (~50) fails only ~3% of the time (noise < -14, i.e. the
+// bottom 1/30 of the spread) — genuinely rare, as intended, not a coinflip
+// the way SAVE_DIFFICULTY_THRESHOLD deliberately is for an average keeper.
+// A below-average pawn (~40) fails much more often (~37%), which is the
+// intended shape (weak headers of the ball being unreliable), not a bug.
+export const HEADER_DIFFICULTY_THRESHOLD = 36;
+
+// How far upfield (away from the winning pawn's own goal) an uncontested
+// clearance header aims when pickHeaderTarget finds no shot and no open
+// teammate — a point, not a specific pawn. Kept well under KICK_RANGE (24)
+// so a clearance reads as a realistic punt, not a max-effort launch every
+// time.
+export const HEADER_CLEARANCE_DISTANCE = 14;
+
 // Post-landing ball physics: an unopposed kick or a scrappy (non-decisive)
 // challenge doesn't stop the ball dead — it keeps a bit of momentum and
 // rolls on, losing speed each tick until it settles or someone reaches it.

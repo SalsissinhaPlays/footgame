@@ -15,6 +15,10 @@ import {
   GOAL_ROW_MIN,
   GRID_COLS,
   GRID_ROWS,
+  HEADER_CLEARANCE_DISTANCE,
+  HEADER_DIFFICULTY_THRESHOLD,
+  HEADER_RADIUS,
+  HEADER_REACH_HEIGHT,
   KICK_RANGE,
   LOFT_APEX_HEIGHT_RATIO,
   LOFT_APEX_MAX,
@@ -35,7 +39,7 @@ import {
   TACKLE_RADIUS,
 } from "./constants";
 import { sampleLanding } from "./aim";
-import { resolveContest, resolveContestDetailed, rollSaveAttempt } from "./contest";
+import { resolveContest, resolveContestDetailed, rollHeaderAttempt, rollSaveAttempt } from "./contest";
 import type { ContestKind } from "./contest";
 import { attemptsReaction } from "./reactions";
 import type { Ball, Pawn, Side, Vec2 } from "./types";
@@ -296,6 +300,43 @@ function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
   };
 }
 
+/**
+ * A header's redirect: starts from the CONTACT POINT (where the header
+ * happened — see checkHeader), not the winning pawn's own pos, toward the
+ * auto-picked target, using `heading` for spread instead of `skill`.
+ * apexHeight is always 0 — headers stay grounded this pass, deliberately no
+ * header-off-a-header (see checkHeader's and the tick loop's doc comments).
+ * A standalone function rather than a helper shared with startFlight — the
+ * two have different calling shapes (one reads plannedKickLoft off a
+ * carrier Pawn, the other starts from a bare contact point with no carrier/
+ * loft concept at all), and this codebase already keeps similarly-shaped-
+ * but-distinct logic separate elsewhere rather than force a shared
+ * abstraction onto it.
+ */
+function startHeaderFlight(winner: Pawn, contactPoint: Vec2, rawTarget: Vec2): FlightStart {
+  const dist = distance(contactPoint, rawTarget);
+  const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
+  const aim: Vec2 = {
+    x: contactPoint.x + (rawTarget.x - contactPoint.x) * clampFraction,
+    y: contactPoint.y + (rawTarget.y - contactPoint.y) * clampFraction,
+  };
+  const landing = sampleLanding(aim, distance(contactPoint, aim), winner.player.heading);
+  const totalDist = Math.max(distance(contactPoint, landing.point), 1e-6);
+  return {
+    flight: {
+      kickerId: winner.id,
+      kickerSide: winner.side,
+      from: { ...contactPoint },
+      to: landing.point,
+      totalDist,
+      traveled: 0,
+      apexHeight: 0,
+      contested: new Set(),
+    },
+    mishit: landing.missBy > landing.sigma,
+  };
+}
+
 function pointAlongFlight(flight: BallFlight): Vec2 {
   const t = Math.min(1, flight.traveled / flight.totalDist);
   return {
@@ -391,6 +432,128 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
     flight.contested.add(p.id);
   }
   return { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
+}
+
+interface HeaderOutcome {
+  /** Pawn who won the header and is now redirecting it. Null when nobody was eligible this tick (flight continues untouched) or when a lone uncontested pawn fluffed it. */
+  winner: Pawn | null;
+  /** Where the header contact happened. Null iff winner is null AND nobody was eligible at all. */
+  contactPoint: Vec2 | null;
+  /** True only for the lone-uncontested-pawn case that failed HEADER_DIFFICULTY_THRESHOLD. */
+  fluffed: boolean;
+  event: string | null;
+}
+
+interface HeaderTarget {
+  point: Vec2;
+  label: string;
+}
+
+function goalNetFor(attackingSide: Side): Vec2 {
+  const y = Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2);
+  return { x: attackingSide === "home" ? GRID_COLS : -1, y };
+}
+
+function goalLineFor(attackingSide: Side): Vec2 {
+  const y = Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2);
+  return { x: attackingSide === "home" ? GRID_COLS - 1 : 0, y };
+}
+
+/** Same shape as ai.ts's hasClearLane (distanceToSegment against CAPTURE_RADIUS) — reimplemented here rather than imported, since ai.ts is frozen/deferred pending its own overhaul (see CLAUDE.md). */
+function hasHeaderLane(from: Vec2, to: Vec2, obstacles: Pawn[]): boolean {
+  return !obstacles.some((o) => distanceToSegment(o.pos, from, to) <= CAPTURE_RADIUS);
+}
+
+/**
+ * Fully automatic aim-point choice for a won header — no planning UI, this
+ * runs mid-resolution regardless of who "controls" the winning pawn this
+ * turn. Mirrors ai.ts's shoot/pass/dribble shape (hasClearLane, nearest
+ * more-advanced open teammate, KICK_RANGE-gated shot) but must work for
+ * EITHER side, unlike ai.ts which only ever plans for one side per turn —
+ * hence a fresh implementation here, not a call into ai.ts.
+ */
+function pickHeaderTarget(winner: Pawn, contactPoint: Vec2, pawns: Pawn[]): HeaderTarget {
+  const opponents = pawns.filter((p) => p.side !== winner.side);
+  const teammates = pawns.filter((p) => p.side === winner.side && p.id !== winner.id);
+  const goalNet = goalNetFor(winner.side);
+  const goalLine = goalLineFor(winner.side);
+
+  if (distance(contactPoint, goalNet) <= KICK_RANGE && hasHeaderLane(contactPoint, goalNet, opponents)) {
+    return { point: goalNet, label: "toward goal" };
+  }
+
+  const passTarget = teammates
+    .filter((t) => t.player.position !== "GK")
+    .filter((t) => distance(contactPoint, t.pos) <= KICK_RANGE && hasHeaderLane(contactPoint, t.pos, opponents))
+    .filter((t) => distance(t.pos, goalLine) < distance(contactPoint, goalLine) - 1)
+    .sort((a, b) => distance(a.pos, goalLine) - distance(b.pos, goalLine))[0];
+  if (passTarget) return { point: passTarget.pos, label: `to ${passTarget.player.name}` };
+
+  // Clearance: a point upfield along the winner's OWN attacking direction
+  // (away from the goal they defend), not tied to any teammate.
+  const dirX = winner.side === "home" ? 1 : -1;
+  return {
+    point: { x: contactPoint.x + dirX * HEADER_CLEARANCE_DISTANCE, y: contactPoint.y },
+    label: "clear of danger",
+  };
+}
+
+/**
+ * Checks this tick's swept segment for header eligibility (HEADER_RADIUS of
+ * any pawn, either side, excluding the flight's own kicker and anyone
+ * already in flight.contested — same exclusions checkCapture already uses:
+ * the kicker shouldn't head their own just-struck pass, and a pawn who
+ * already lost one contest against this flight doesn't get a free second
+ * roll just because the height band changed).
+ *
+ * 2+ eligible pawns is a genuine resolveContestDetailed(..., "header")
+ * contest — always produces a winner, no separate fail chance (a contested
+ * win is always clean this pass; unlike tackle/interception there's no
+ * DECISIVE_CONTEST_MARGIN split here — a future refinement could add one
+ * without restructuring anything). Exactly 1 eligible pawn still rolls,
+ * against HEADER_DIFFICULTY_THRESHOLD rather than auto-winning — clearing
+ * it is a clean header, failing it is a fluff (ball squirts loose, same
+ * deflection shape checkCapture's narrow-win case uses). 0 eligible pawns:
+ * no header this tick, flight continues untouched.
+ */
+function checkHeader(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): HeaderOutcome {
+  const eligible = pawns
+    .filter((p) => p.id !== flight.kickerId && !flight.contested.has(p.id))
+    .map((p) => ({ p, d: distanceToSegment(p.pos, from, to) }))
+    .filter(({ d }) => d <= HEADER_RADIUS)
+    .sort((a, b) => a.d - b.d);
+
+  if (eligible.length === 0) {
+    return { winner: null, contactPoint: null, fluffed: false, event: null };
+  }
+
+  if (eligible.length === 1) {
+    const { p } = eligible[0];
+    const contactPoint = closestPointOnSegment(p.pos, from, to);
+    if (rollHeaderAttempt(p) < HEADER_DIFFICULTY_THRESHOLD) {
+      return {
+        winner: null,
+        contactPoint,
+        fluffed: true,
+        event: `${p.player.name} rises for it... and fluffs the header!`,
+      };
+    }
+    return {
+      winner: p,
+      contactPoint,
+      fluffed: false,
+      event: `${p.player.name} rises unchallenged and wins the header`,
+    };
+  }
+
+  const contestants = eligible.map(({ p }) => p);
+  const { winner } = resolveContestDetailed(contestants, "header");
+  return {
+    winner,
+    contactPoint: closestPointOnSegment(winner.pos, from, to),
+    fluffed: false,
+    event: `Header duel: ${contestants.map((c) => c.player.name).join(" vs ")} — ${winner.player.name} wins it`,
+  };
 }
 
 type SaveOutcome = { result: "goal" } | { result: "caught"; gk: Pawn } | { result: "parried"; gk: Pawn };
@@ -780,15 +943,23 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         continue;
       }
 
-      // While the ball is above reach, nobody — teammate or opponent — can
-      // touch it; the flight just sails on overhead. This is the one seam a
-      // future header contest slots into (see BALL_REACH_HEIGHT).
-      const outcome =
-        captureGateHeight <= BALL_REACH_HEIGHT
-          ? checkCapture(flight, tickStart, point, current)
-          : { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
+      // Three height bands: grounded/reachable (normal capture), headable
+      // (a new header contest), or still fully untouchable — captureGateHeight
+      // already accounts for the whole tick's swept segment, not just where
+      // it lands (see its own definition above).
+      let outcome: CaptureOutcome = { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
+      let header: HeaderOutcome | null = null;
+      if (captureGateHeight <= BALL_REACH_HEIGHT) {
+        outcome = checkCapture(flight, tickStart, point, current);
+      } else if (captureGateHeight <= HEADER_REACH_HEIGHT) {
+        header = checkHeader(flight, tickStart, point, current);
+      }
+      // Above HEADER_REACH_HEIGHT: both stay at their all-null defaults —
+      // still fully untouchable, unchanged from before headers existed.
+
       ballPos = point;
       if (outcome.event) events.push(outcome.event);
+      if (header?.event) events.push(header.event);
 
       if (outcome.receiver) {
         // Possession stays with the same side — play continues, the receiver
@@ -816,6 +987,39 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           excludeId: deflectorId ?? undefined,
         };
         ballPos = outcome.deflectedAt;
+      } else if (header?.winner && header.contactPoint) {
+        // Clean header: a genuine NEW BallFlight, not a carrier handoff —
+        // `flight` is reassigned (not nulled), so the NEXT tick's
+        // `if (flight)` branch just continues resolving this new flight
+        // exactly like any freshly kicked one, from traveled=0. Deliberately
+        // no freeze/break here even when the winner's side differs from
+        // lastControllingSide — the ball's still airborne, possession hasn't
+        // settled with anyone the way a real interception settles it.
+        // Whatever eventually receives/intercepts/saves THIS new flight gets
+        // its own existing freeze semantics, unchanged.
+        const target = pickHeaderTarget(header.winner, header.contactPoint, current);
+        const started = startHeaderFlight(header.winner, header.contactPoint, target.point);
+        flight = started.flight;
+        ballPos = header.contactPoint;
+        ballHeight = 0;
+        lastControllingSide = header.winner.side;
+        events.push(
+          started.mishit
+            ? `${header.winner.player.name} heads it, but it's off target`
+            : `${header.winner.player.name} heads it ${target.label}`
+        );
+      } else if (header?.fluffed && header.contactPoint) {
+        // Same shape as outcome.deflectedAt — ball squirts loose at a wide
+        // random angle off the incoming flight's direction. No excludeId:
+        // unlike a deflection there's no separate "deflector" pawn to
+        // exclude from reclaiming it — the lone header-attempter IS who
+        // fluffed it, and excluding them from a ball right at their own feet
+        // would feel wrong.
+        const dir = normalizeVec({ x: flight.to.x - flight.from.x, y: flight.to.y - flight.from.y });
+        const kicked = rotateVec(dir, (Math.random() * 2 - 1) * DEFLECTION_ANGLE_SPREAD);
+        flight = null;
+        roll = { pos: header.contactPoint, vx: kicked.x * DEFLECTION_SPEED, vy: kicked.y * DEFLECTION_SPEED };
+        ballPos = header.contactPoint;
       } else if (flight.traveled >= flight.totalDist) {
         // Nobody there to meet it — the ball keeps a little energy and rolls
         // on rather than stopping dead exactly at the aim point.

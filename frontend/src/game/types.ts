@@ -10,6 +10,8 @@ export interface PlayerDTO {
   jumping: number;
   shot_stopping: number;
   reflexes: number;
+  /** Governs redirect precision when this pawn wins a header — see aim.ts's sampleLanding, called with this in place of skill. */
+  heading: number;
 }
 
 export interface TeamDTO {

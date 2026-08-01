@@ -20,7 +20,7 @@ import type { Pawn } from "./types";
  * duel, a shot vs. a goalkeeper) means adding a table entry here, not
  * touching the resolution loop that calls into this.
  */
-export type ContestKind = "loose_ball" | "interception" | "tackle" | "gk_claim" | "save";
+export type ContestKind = "loose_ball" | "interception" | "tackle" | "gk_claim" | "save" | "header";
 
 // A partial map rather than a fixed {skill,pace,stamina} interface — the
 // growing attribute surface (jumping/shot_stopping/reflexes added for the
@@ -54,6 +54,14 @@ const WEIGHTS: Record<ContestKind, AttributeWeights> = {
   // game-reading) a minor one. No jumping entry here — see reachFactor
   // below for why.
   save: { shot_stopping: 0.55, reflexes: 0.3, skill: 0.15 },
+  // Winning the physical duel for a header: jumping dominates (getting up
+  // to and controlling the ball in the air), skill a real secondary factor
+  // (timing/technique), pace a light one (getting to the spot at all).
+  // Same shape as tackle's weights (dominant + secondary + light tertiary,
+  // summing to 1.0). Note `heading` (redirect precision once a header is
+  // won) deliberately has no entry here — it governs aim.ts's landing
+  // spread for the redirect, not who wins the contest.
+  header: { jumping: 0.5, skill: 0.3, pace: 0.2 },
 };
 
 const RANDOM_SPREAD = 30; // roll gets +/- half of this, i.e. +/-15
@@ -129,6 +137,17 @@ export function rollSaveAttempt(gk: Pawn, effectiveDistance: number): number {
     },
   };
   return rollFor(scaled, "save", null);
+}
+
+/**
+ * Raw header roll for a single unopposed pawn — compared against
+ * HEADER_DIFFICULTY_THRESHOLD by resolve.ts's checkHeader, not against
+ * another contestant's roll. A 1-contestant resolveContestDetailed call
+ * would give a margin of 0 (runner-up falls back to the same roll), which
+ * isn't what an uncontested header needs — it needs the raw value.
+ */
+export function rollHeaderAttempt(pawn: Pawn): number {
+  return rollFor(pawn, "header", null);
 }
 
 export interface ContestOutcome {
