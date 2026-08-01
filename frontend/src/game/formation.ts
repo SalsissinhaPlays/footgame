@@ -1,32 +1,33 @@
 import { GRID_COLS } from "./constants";
+import { FORMATION_6V6_DEFAULT } from "./formations";
+import type { Formation } from "./formations";
 import type { Pawn, PlayerDTO, Side, Vec2 } from "./types";
-
-const HOME_SLOTS: Record<string, Vec2> = {
-  GK: { x: 4, y: 20 },
-  DEF: { x: 11, y: 10 },
-  DEF2: { x: 11, y: 30 },
-  MID: { x: 22, y: 7 },
-  MID2: { x: 22, y: 33 },
-  FWD: { x: 22, y: 20 },
-};
-
-const SLOT_ORDER = ["GK", "DEF", "DEF2", "MID", "MID2", "FWD"];
 
 function mirrorX(x: number): number {
   return GRID_COLS - 1 - x;
 }
 
-export function buildFormation(players: PlayerDTO[], side: Side): Pawn[] {
-  const seenCounts: Record<string, number> = {};
+/**
+ * Assigns each player to the formation slot matching their PlayerDTO.position,
+ * falling back to whatever slot is left over for anyone whose position has no
+ * (or no more) matching slot — e.g. an extra MID beyond the formation's own
+ * MID count still gets placed somewhere sensible rather than dropped. Slot
+ * order/count is entirely data-driven (see formations.ts) — this algorithm
+ * has no knowledge of squad size or shape.
+ */
+function assignSlots(players: PlayerDTO[], formation: Formation): { player: PlayerDTO; pos: Vec2 }[] {
+  const remaining = [...formation.slots];
+  return players.map((player) => {
+    const matchIndex = remaining.findIndex((s) => s.position === player.position);
+    const index = matchIndex !== -1 ? matchIndex : 0;
+    const [slot] = remaining.splice(index, 1);
+    return { player, pos: slot?.pos ?? { x: GRID_COLS / 2, y: 20 } };
+  });
+}
 
-  return players.map((player, index) => {
-    const baseKey = player.position;
-    const count = seenCounts[baseKey] ?? 0;
-    seenCounts[baseKey] = count + 1;
-    const slotKey = count === 0 ? baseKey : `${baseKey}${count + 1}`;
-    const slot = HOME_SLOTS[slotKey] ?? HOME_SLOTS[SLOT_ORDER[index] ?? "MID"];
-
-    const pos: Vec2 = side === "home" ? { ...slot } : { x: mirrorX(slot.x), y: slot.y };
+export function buildFormation(players: PlayerDTO[], side: Side, formation: Formation = FORMATION_6V6_DEFAULT): Pawn[] {
+  return assignSlots(players, formation).map(({ player, pos: slotPos }) => {
+    const pos: Vec2 = side === "home" ? { ...slotPos } : { x: mirrorX(slotPos.x), y: slotPos.y };
 
     return {
       id: `${side}-${player.id}`,
