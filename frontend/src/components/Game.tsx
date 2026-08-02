@@ -15,6 +15,8 @@ import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
 import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { resolveTurn } from "../game/resolve";
+import type { DeadBallResult } from "../game/resolve";
+import { resolveSetupTurn, SETUP_TURNS_BY_TYPE } from "../game/restartSetup";
 import type { Ball, Pawn, Stance, TeamDTO, Vec2 } from "../game/types";
 import type { MatchCallbacks } from "../phaser/MatchScene";
 import { MatchScene } from "../phaser/MatchScene";
@@ -86,6 +88,12 @@ function stanceLabel(stance: Stance | null): string {
   const opt = ALL_STANCE_OPTIONS.find((o) => o.key === (stance?.kind ?? "none"));
   return opt?.label ?? "None";
 }
+
+const RESTART_TYPE_LABEL: Record<DeadBallResult["type"], string> = {
+  throw_in: "Throw-in",
+  corner: "Corner",
+  goal_kick: "Goal kick",
+};
 
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
   const homePlayers = pawns.filter((p) => p.side === "home").map((p) => p.player);
@@ -162,6 +170,14 @@ export function Game({ mode, onExitToMenu }: Props) {
   const [controllingSide, setControllingSide] = useState<"home" | "away">("home");
   const [readySides, setReadySides] = useState<Set<"home" | "away">>(new Set());
   const [handoff, setHandoff] = useState(false);
+  // Awaiting the restarting side's quick-vs-extended-setup choice; set right
+  // after a dead-ball restart is placed, cleared once they choose.
+  const [pendingRestart, setPendingRestart] = useState<DeadBallResult | null>(null);
+  // Active only once "extended setup" was chosen — counts down one full turn
+  // at a time via resolveSetupTurn instead of the normal live resolveTurn.
+  const [restartSetup, setRestartSetup] = useState<{ deadBall: DeadBallResult; turnsRemaining: number } | null>(
+    null
+  );
   const [turn, setTurn] = useState(1);
   const [homeScore, setHomeScore] = useState(0);
   const [awayScore, setAwayScore] = useState(0);
@@ -423,6 +439,43 @@ export function Game({ mode, onExitToMenu }: Props) {
     setResolving(true);
     setEvents([]);
 
+    // An active "extended setup" period: this turn is pure repositioning,
+    // not a live resolveTurn — no kicks/captures/tackles/saves are possible
+    // since the ball is dead at a fixed spot for the whole turn. See
+    // restartSetup.ts's own doc comment for why this is a separate function
+    // rather than a mode of resolveTurn.
+    if (restartSetup) {
+      const snapshots = resolveSetupTurn(inputPawns, restartSetup.deadBall.spot);
+      let prevPawns = inputPawns;
+      let prevBallPos = restartSetup.deadBall.spot;
+      for (const snapshot of snapshots) {
+        const stillMoving = !nothingMoved(snapshot.pawns, snapshot.ball, prevPawns, prevBallPos);
+        setPawns(snapshot.pawns);
+        setBall({ pos: snapshot.ball });
+        setBallHeight(snapshot.ballHeight);
+        await sleep(stillMoving ? 350 : 80);
+        prevPawns = snapshot.pawns;
+        prevBallPos = snapshot.ball;
+      }
+
+      setPawns((prev) =>
+        prev.map((p) => ({
+          ...p,
+          stance: p.stance ? null : p.stance,
+          plannedSprint: false,
+          sprintCooldown: p.plannedSprint ? SPRINT_COOLDOWN_TURNS : Math.max(0, p.sprintCooldown - 1),
+        }))
+      );
+
+      const turnsRemaining = restartSetup.turnsRemaining - 1;
+      setRestartSetup(turnsRemaining > 0 ? { ...restartSetup, turnsRemaining } : null);
+      setTurn((t) => t + 1);
+      setReadySides(new Set());
+      setControllingSide("home");
+      setResolving(false);
+      return;
+    }
+
     const { snapshots, goal, deadBall } = resolveTurn(inputPawns, ball);
     let prevPawns = inputPawns;
     let prevBallPos = ball.pos;
@@ -482,12 +535,31 @@ export function Game({ mode, onExitToMenu }: Props) {
         );
         return prev.map((p) => (p.id === nearest.id ? { ...p, pos: { ...deadBall.spot } } : p));
       });
+
+      // Only the restarting side gets a say in quick-vs-extended — no human
+      // to ask when it falls to an AI-controlled or never-planned (solo away)
+      // side, so those always take it quickly, matching today's behavior.
+      const humanControlsRestart =
+        mode === "hotseat" ||
+        (mode === "ai" && deadBall.side === "home") ||
+        (mode === "solo" && deadBall.side === "home");
+      if (humanControlsRestart) setPendingRestart(deadBall);
     }
 
     setTurn((t) => t + 1);
     setReadySides(new Set());
     setControllingSide("home");
     setResolving(false);
+  }
+
+  function handleQuickRestart() {
+    setPendingRestart(null);
+  }
+
+  function handleExtendedSetup() {
+    if (!pendingRestart) return;
+    setRestartSetup({ deadBall: pendingRestart, turnsRemaining: SETUP_TURNS_BY_TYPE[pendingRestart.type] });
+    setPendingRestart(null);
   }
 
   async function handleReady() {
@@ -527,6 +599,27 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   if (loading) {
     return <p>Loading teams...</p>;
+  }
+
+  if (pendingRestart) {
+    const sideName = pendingRestart.side === "home" ? teams[0]?.name : teams[1]?.name;
+    const bonusTurns = SETUP_TURNS_BY_TYPE[pendingRestart.type];
+    return (
+      <div className="game-wrapper handoff-screen" ref={wrapperRef}>
+        <h2>
+          {RESTART_TYPE_LABEL[pendingRestart.type]} for {sideName}
+        </h2>
+        <p>Take it now, or call for extended setup to get organized first?</p>
+        <div className="restart-choice-actions">
+          <button type="button" onClick={handleQuickRestart}>
+            Take it quickly
+          </button>
+          <button type="button" onClick={handleExtendedSetup}>
+            Call for extended setup ({bonusTurns} turn{bonusTurns > 1 ? "s" : ""})
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (handoff) {
@@ -589,6 +682,12 @@ export function Game({ mode, onExitToMenu }: Props) {
               )}
             </div>
             {pickingMarkTarget && <div className="hud-banner">Click an opponent pawn to mark.</div>}
+            {restartSetup && (
+              <div className="hud-banner">
+                Setting up for a {RESTART_TYPE_LABEL[restartSetup.deadBall.type].toLowerCase()} —{" "}
+                {restartSetup.turnsRemaining} turn{restartSetup.turnsRemaining > 1 ? "s" : ""} left
+              </div>
+            )}
           </div>
 
           <div className="hud-top-right">
@@ -628,7 +727,7 @@ export function Game({ mode, onExitToMenu }: Props) {
                   <button
                     type="button"
                     className={kickMode ? "active" : ""}
-                    disabled={!selectedIsCarrier}
+                    disabled={!selectedIsCarrier || restartSetup !== null}
                     onClick={() => setKickMode(true)}
                   >
                     Kick

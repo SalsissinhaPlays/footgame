@@ -435,6 +435,12 @@
   cursor: pointer;
 }
 
+.restart-choice-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+
 .hint {
   color: #666;
   font-size: 14px;

@@ -258,7 +258,7 @@ const SIDESTEP_ANGLES_DEG = [0, -30, 30, -60, 60, -90, 90];
  * per-tick rate but can be reduced (e.g. by a nearby "pressure"-stance
  * opponent) without touching the sidestep logic itself.
  */
-function candidateHeadings(pos: Vec2, dest: Vec2, speed: number = PAWN_SPEED_PER_TICK): Vec2[] {
+export function candidateHeadings(pos: Vec2, dest: Vec2, speed: number = PAWN_SPEED_PER_TICK): Vec2[] {
   const toDest = { x: dest.x - pos.x, y: dest.y - pos.y };
   const remaining = Math.hypot(toDest.x, toDest.y);
   if (remaining < 1e-6) return [{ ...pos }];
@@ -291,7 +291,7 @@ export function lineCells(start: Vec2, end: Vec2): Vec2[] {
   return cells;
 }
 
-function distance(a: Vec2, b: Vec2): number {
+export function distance(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
