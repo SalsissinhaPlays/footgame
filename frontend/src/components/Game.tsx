@@ -423,7 +423,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setResolving(true);
     setEvents([]);
 
-    const { snapshots, goal } = resolveTurn(inputPawns, ball);
+    const { snapshots, goal, deadBall } = resolveTurn(inputPawns, ball);
     let prevPawns = inputPawns;
     let prevBallPos = ball.pos;
     // Revealed tick-by-tick in step with the animation, rather than dumped
@@ -468,6 +468,20 @@ export function Game({ mode, onExitToMenu }: Props) {
       setPawns((prev) => kickoffFormation(prev));
       setBall({ pos: BALL_START });
       setBallHeight(0);
+    } else if (deadBall) {
+      // Only the ball and the single pawn taking the restart move — everyone
+      // else stays exactly where the run of play left them, unlike a goal's
+      // full formation reset.
+      setBall({ pos: deadBall.spot });
+      setBallHeight(0);
+      setPawns((prev) => {
+        const eligible = prev.filter((p) => p.side === deadBall.side);
+        if (eligible.length === 0) return prev;
+        const nearest = eligible.reduce((best, p) =>
+          euclideanDistance(p.pos, deadBall.spot) < euclideanDistance(best.pos, deadBall.spot) ? p : best
+        );
+        return prev.map((p) => (p.id === nearest.id ? { ...p, pos: { ...deadBall.spot } } : p));
+      });
     }
 
     setTurn((t) => t + 1);

@@ -11,6 +11,7 @@ import {
   GK_HEIGHT_DISTANCE_WEIGHT,
   GK_PENALTY_DEPTH,
   GK_PENALTY_PAD,
+  GK_SIX_YARD_DEPTH,
   GOAL_ROW_MAX,
   GOAL_ROW_MIN,
   GRID_COLS,
@@ -57,6 +58,16 @@ export interface ResolveResult {
   snapshots: ResolveSnapshot[];
   /** Side that scored, if the ball ended the turn inside a goal mouth. */
   goal: Side | null;
+  /** Set when the ball left the pitch (any of the three ball-states) and the turn froze for a restart — see boundaryCrossing/classifyDeadBall. */
+  deadBall: DeadBallResult | null;
+}
+
+export interface DeadBallResult {
+  type: "throw_in" | "corner" | "goal_kick";
+  /** Side AWARDED the restart. */
+  side: Side;
+  /** Where the ball is placed — and where the nearest eligible pawn of `side` snaps to (see Game.tsx). */
+  spot: Vec2;
 }
 
 function isInGoalRows(y: number): boolean {
@@ -106,6 +117,99 @@ export function goalCrossing(from: Vec2, to: Vec2): { side: Side; point: Vec2 } 
 /** Thin wrapper kept for callers (including the project's throwaway verification scripts) that only care which side scored, not where. */
 export function goalCrossedAlong(from: Vec2, to: Vec2): Side | null {
   return goalCrossing(from, to)?.side ?? null;
+}
+
+type BoundaryCrossing =
+  | { kind: "goal_line"; defendingSide: Side; point: Vec2 }
+  | { kind: "touchline"; point: Vec2 };
+
+/**
+ * Whether the ball's movement this tick crossed the touchline, or the goal
+ * line OUTSIDE the goal mouth (the goal-mouth case is fully owned by
+ * goalCrossing/scoring above and is deliberately excluded here via the
+ * !isInGoalRows guards). Same segment-interpolation shape as goalCrossing,
+ * for the same reason: a fast roll/deflection can jump clean past a
+ * boundary within one tick, and the exact crossing point matters for where
+ * the restart is actually placed, not just whether one happened.
+ */
+export function boundaryCrossing(from: Vec2, to: Vec2): BoundaryCrossing | null {
+  type Candidate = { t: number; result: BoundaryCrossing };
+  const candidates: Candidate[] = [];
+
+  if (from.x >= 0 && to.x < 0) {
+    const t = from.x / (from.x - to.x);
+    const y = from.y + (to.y - from.y) * t;
+    if (!isInGoalRows(y)) candidates.push({ t, result: { kind: "goal_line", defendingSide: "home", point: { x: 0, y } } });
+  }
+  if (from.x < GRID_COLS && to.x >= GRID_COLS) {
+    const t = (GRID_COLS - from.x) / (to.x - from.x);
+    const y = from.y + (to.y - from.y) * t;
+    if (!isInGoalRows(y)) candidates.push({ t, result: { kind: "goal_line", defendingSide: "away", point: { x: GRID_COLS, y } } });
+  }
+  if (from.y >= 0 && to.y < 0) {
+    const t = from.y / (from.y - to.y);
+    const x = from.x + (to.x - from.x) * t;
+    candidates.push({ t, result: { kind: "touchline", point: { x: Math.max(0, Math.min(GRID_COLS, x)), y: 0 } } });
+  }
+  if (from.y < GRID_ROWS && to.y >= GRID_ROWS) {
+    const t = (GRID_ROWS - from.y) / (to.y - from.y);
+    const x = from.x + (to.x - from.x) * t;
+    candidates.push({ t, result: { kind: "touchline", point: { x: Math.max(0, Math.min(GRID_COLS, x)), y: GRID_ROWS } } });
+  }
+
+  if (candidates.length === 0) {
+    // Endpoint fallback, mirroring goalCrossing's goalScoredAt(to) fallback —
+    // defensive only, for a `to` already past a boundary with no clean
+    // sign-change caught above.
+    if (to.x < 0 && !isInGoalRows(to.y)) return { kind: "goal_line", defendingSide: "home", point: { x: 0, y: to.y } };
+    if (to.x >= GRID_COLS && !isInGoalRows(to.y)) return { kind: "goal_line", defendingSide: "away", point: { x: GRID_COLS, y: to.y } };
+    if (to.y < 0) return { kind: "touchline", point: { x: Math.max(0, Math.min(GRID_COLS, to.x)), y: 0 } };
+    if (to.y >= GRID_ROWS) return { kind: "touchline", point: { x: Math.max(0, Math.min(GRID_COLS, to.x)), y: GRID_ROWS } };
+    return null;
+  }
+  // Whichever boundary the segment crosses FIRST chronologically (smallest
+  // t) wins — a diagonal deflection exiting right near a corner flag can
+  // cross both a goal line and a touchline within one tick's travel budget,
+  // and a fixed "always check X first" rule would occasionally misattribute
+  // which one actually happened first.
+  candidates.sort((a, b) => a.t - b.t);
+  return candidates[0].result;
+}
+
+/**
+ * Throw-in / corner / goal-kick classification once a boundary crossing is
+ * known. `touchedBySide` is whoever last touched the ball (see
+ * BallRoll.touchedBySide / flight.kickerSide at the call sites) — distinct
+ * from "who controls the ball," since a deflection or a parried save counts
+ * as a touch here even though it never grants control.
+ */
+function classifyDeadBall(crossing: BoundaryCrossing, touchedBySide: Side): DeadBallResult {
+  if (crossing.kind === "touchline") {
+    const side: Side = touchedBySide === "home" ? "away" : "home";
+    return { type: "throw_in", side, spot: crossing.point };
+  }
+  const { defendingSide, point } = crossing;
+  const attackingSide: Side = defendingSide === "home" ? "away" : "home";
+  if (touchedBySide === defendingSide) {
+    // The defender's own touch sent it behind their line -> corner for the
+    // attackers. Unambiguous which end: boundaryCrossing only reports
+    // "goal_line" outside the goal rows, so point.y is strictly below
+    // GOAL_ROW_MIN or strictly above GOAL_ROW_MAX, never in between.
+    const cornerY = point.y < GOAL_ROW_MIN ? 0 : GRID_ROWS;
+    return { type: "corner", side: attackingSide, spot: { x: point.x, y: cornerY } };
+  }
+  // The attacking side's own shot/pass went behind with no defensive touch
+  // -> goal kick, from inside the six-yard box.
+  const y = Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2);
+  const x = defendingSide === "home" ? GK_SIX_YARD_DEPTH : GRID_COLS - GK_SIX_YARD_DEPTH;
+  return { type: "goal_kick", side: defendingSide, spot: { x, y } };
+}
+
+function deadBallLabel(d: DeadBallResult): string {
+  const sideName = d.side === "home" ? "the home side" : "the away side";
+  if (d.type === "throw_in") return `Throw-in to ${sideName}`;
+  if (d.type === "corner") return `Corner to ${sideName}`;
+  return `Goal kick to ${sideName}`;
 }
 
 /** Whether `pos` sits within `side`'s goalkeeper box (six-yard or penalty, per depth/pad). Mirrors MatchScene.ts's own box polygon math (same raw grid coordinates) so "inside the drawn box" and "inside the gameplay box" can't drift apart. */
@@ -260,6 +364,8 @@ interface BallRoll {
   vy: number;
   /** The pawn whose touch just knocked the ball loose, if any — excluded from claiming it back for the rest of this roll, since a ball that's just come off your foot at a bad angle isn't immediately back under your control. */
   excludeId?: string;
+  /** Side that last touched the ball to produce this roll — a Side rather than a pawn id, since excludeId is absent for an unopposed landing (nobody touched it, just residual momentum) while a side is always knowable. Used for throw-in/corner/goal-kick attribution if this roll goes out of bounds. */
+  touchedBySide: Side;
 }
 
 interface FlightStart {
@@ -358,6 +464,8 @@ interface CaptureOutcome {
   deflectedAt: Vec2 | null;
   /** Who caused the deflection — excluded from immediately reclaiming their own loose touch. */
   deflectedBy: string | null;
+  /** Side of the deflecting pawn — used for throw-in/corner/goal-kick attribution if the resulting loose ball goes out of bounds. */
+  deflectedBySide: Side | null;
   event: string | null;
 }
 
@@ -402,6 +510,7 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
         interceptedBy: null,
         deflectedAt: null,
         deflectedBy: null,
+        deflectedBySide: null,
         event: `Pass: ${kicker.player.name} finds ${p.player.name}`,
       };
     }
@@ -418,6 +527,7 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
           interceptedBy: p,
           deflectedAt: null,
           deflectedBy: null,
+          deflectedBySide: null,
           event: `Interception: ${p.player.name} cuts out ${kicker.player.name}'s pass`,
         };
       }
@@ -426,12 +536,13 @@ function checkCapture(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): 
         interceptedBy: null,
         deflectedAt: closestPointOnSegment(p.pos, from, to),
         deflectedBy: p.id,
+        deflectedBySide: p.side,
         event: `${p.player.name} half-blocks ${kicker.player.name}'s shot — loose ball!`,
       };
     }
     flight.contested.add(p.id);
   }
-  return { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
+  return { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, deflectedBySide: null, event: null };
 }
 
 interface HeaderOutcome {
@@ -441,6 +552,8 @@ interface HeaderOutcome {
   contactPoint: Vec2 | null;
   /** True only for the lone-uncontested-pawn case that failed HEADER_DIFFICULTY_THRESHOLD. */
   fluffed: boolean;
+  /** Side of whoever fluffed it, when fluffed is true — used for throw-in/corner/goal-kick attribution if the resulting loose ball goes out of bounds. */
+  fluffedBySide: Side | null;
   event: string | null;
 }
 
@@ -524,7 +637,7 @@ function checkHeader(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): H
     .sort((a, b) => a.d - b.d);
 
   if (eligible.length === 0) {
-    return { winner: null, contactPoint: null, fluffed: false, event: null };
+    return { winner: null, contactPoint: null, fluffed: false, fluffedBySide: null, event: null };
   }
 
   if (eligible.length === 1) {
@@ -535,6 +648,7 @@ function checkHeader(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): H
         winner: null,
         contactPoint,
         fluffed: true,
+        fluffedBySide: p.side,
         event: `${p.player.name} rises for it... and fluffs the header!`,
       };
     }
@@ -542,6 +656,7 @@ function checkHeader(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): H
       winner: p,
       contactPoint,
       fluffed: false,
+      fluffedBySide: null,
       event: `${p.player.name} rises unchallenged and wins the header`,
     };
   }
@@ -552,6 +667,7 @@ function checkHeader(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): H
     winner,
     contactPoint: closestPointOnSegment(winner.pos, from, to),
     fluffed: false,
+    fluffedBySide: null,
     event: `Header duel: ${contestants.map((c) => c.player.name).join(" vs ")} — ${winner.player.name} wins it`,
   };
 }
@@ -903,7 +1019,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           events.push(crossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
           const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: crossing.side };
+          return { snapshots, goal: crossing.side, deadBall: null };
         }
         // Saved or parried: the flight ends here either way. Capture the
         // flight's direction before nulling it (needed for the parry's
@@ -923,12 +1039,24 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
             vx: kicked.x * DEFLECTION_SPEED,
             vy: kicked.y * DEFLECTION_SPEED,
             excludeId: outcome.gk.id,
+            touchedBySide: outcome.gk.side,
           };
           ballPos = crossing.point;
           events.push(`${outcome.gk.player.name} parries it away — loose ball!`);
         }
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
         continue;
+      }
+
+      const boundary = boundaryCrossing(tickStart, point);
+      if (boundary) {
+        const deadBall = classifyDeadBall(boundary, flight.kickerSide);
+        flight = null;
+        currentCarrierId = null;
+        ballPos = boundary.point;
+        events.push(deadBallLabel(deadBall));
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+        return { snapshots, goal: null, deadBall };
       }
 
       const clampedPoint = clampBallToBounds(point);
@@ -947,7 +1075,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       // (a new header contest), or still fully untouchable — captureGateHeight
       // already accounts for the whole tick's swept segment, not just where
       // it lands (see its own definition above).
-      let outcome: CaptureOutcome = { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, event: null };
+      let outcome: CaptureOutcome = { receiver: null, interceptedBy: null, deflectedAt: null, deflectedBy: null, deflectedBySide: null, event: null };
       let header: HeaderOutcome | null = null;
       if (captureGateHeight <= BALL_REACH_HEIGHT) {
         outcome = checkCapture(flight, tickStart, point, current);
@@ -985,6 +1113,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           vx: kicked.x * DEFLECTION_SPEED,
           vy: kicked.y * DEFLECTION_SPEED,
           excludeId: deflectorId ?? undefined,
+          touchedBySide: outcome.deflectedBySide!,
         };
         ballPos = outcome.deflectedAt;
       } else if (header?.winner && header.contactPoint) {
@@ -1018,15 +1147,21 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         const dir = normalizeVec({ x: flight.to.x - flight.from.x, y: flight.to.y - flight.from.y });
         const kicked = rotateVec(dir, (Math.random() * 2 - 1) * DEFLECTION_ANGLE_SPREAD);
         flight = null;
-        roll = { pos: header.contactPoint, vx: kicked.x * DEFLECTION_SPEED, vy: kicked.y * DEFLECTION_SPEED };
+        roll = {
+          pos: header.contactPoint,
+          vx: kicked.x * DEFLECTION_SPEED,
+          vy: kicked.y * DEFLECTION_SPEED,
+          touchedBySide: header.fluffedBySide!,
+        };
         ballPos = header.contactPoint;
       } else if (flight.traveled >= flight.totalDist) {
         // Nobody there to meet it — the ball keeps a little energy and rolls
         // on rather than stopping dead exactly at the aim point.
         const dir = normalizeVec({ x: flight.to.x - flight.from.x, y: flight.to.y - flight.from.y });
+        const kickerSide = flight.kickerSide;
         flight = null;
         currentCarrierId = null;
-        roll = { pos: point, vx: dir.x * ROLL_START_SPEED, vy: dir.y * ROLL_START_SPEED };
+        roll = { pos: point, vx: dir.x * ROLL_START_SPEED, vy: dir.y * ROLL_START_SPEED, touchedBySide: kickerSide };
       }
     } else if (roll) {
       // A loose ball on the ground — always grounded, whether it just
@@ -1048,7 +1183,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           events.push(rollCrossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
           const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: rollCrossing.side };
+          return { snapshots, goal: rollCrossing.side, deadBall: null };
         }
         roll = null;
         if (outcome.result === "caught") {
@@ -1063,12 +1198,24 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
             vx: Math.cos(angle) * DEFLECTION_SPEED,
             vy: Math.sin(angle) * DEFLECTION_SPEED,
             excludeId: outcome.gk.id,
+            touchedBySide: outcome.gk.side,
           };
           ballPos = rollCrossing.point;
           events.push(`${outcome.gk.player.name} keeps it out — loose ball!`);
         }
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
         continue;
+      }
+
+      const rollBoundary = boundaryCrossing(rollFrom, ballPos);
+      if (rollBoundary) {
+        const deadBall = classifyDeadBall(rollBoundary, roll.touchedBySide);
+        roll = null;
+        currentCarrierId = null;
+        ballPos = rollBoundary.point;
+        events.push(deadBallLabel(deadBall));
+        snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+        return { snapshots, goal: null, deadBall };
       }
 
       const clampedRollPos = clampBallToBounds(ballPos);
@@ -1110,6 +1257,17 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         ballPos = { ...holder.pos };
         ballHeight = 0;
 
+        const holderFrom = preTickPos.get(holder.id)!;
+        const dribbleBoundary = boundaryCrossing(holderFrom, holder.pos);
+        if (dribbleBoundary) {
+          const deadBall = classifyDeadBall(dribbleBoundary, holder.side);
+          currentCarrierId = null;
+          ballPos = dribbleBoundary.point;
+          events.push(deadBallLabel(deadBall));
+          snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
+          return { snapshots, goal: null, deadBall };
+        }
+
         // Tackling: a dribbling carrier can be challenged for the ball, not
         // just a kicked one. Without this, a carrier who never kicks is
         // completely undisputed — bumping into them during movement has no
@@ -1148,6 +1306,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
               vx: dir.x * DEFLECTION_SPEED,
               vy: dir.y * DEFLECTION_SPEED,
               excludeId: challenger.id,
+              touchedBySide: challenger.side,
             };
             ballPos = { ...holder.pos };
             events.push(`${challenger.player.name} half-tackles ${holder.player.name} — loose ball!`);
@@ -1212,12 +1371,12 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     if (outcome.result === "goal") {
       events.push(finalGoalSide === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
       if (last) last.events.push(...takeNewEvents());
-      return { snapshots, goal: finalGoalSide };
+      return { snapshots, goal: finalGoalSide, deadBall: null };
     }
     events.push(`${outcome.gk.player.name} denies it right on the line!`);
     if (last) last.events.push(...takeNewEvents());
-    return { snapshots, goal: null };
+    return { snapshots, goal: null, deadBall: null };
   }
 
-  return { snapshots, goal: null };
+  return { snapshots, goal: null, deadBall: null };
 }
