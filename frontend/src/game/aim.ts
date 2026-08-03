@@ -17,6 +17,14 @@ import type { Vec2 } from "./types";
 // pitch dimensions.
 const BASE_SPREAD = 0.12;
 const DISTANCE_SPREAD_FACTOR = 0.095;
+// A cross is a genuinely harder ball to place than a short pass — this
+// factor (roughly double the normal one) replaces DISTANCE_SPREAD_FACTOR
+// when isCross. BASE_SPREAD/SKILL_SPREAD_FACTOR stay shared, which is what
+// makes a SHORT cross land almost like a lobbed pass (both formulas
+// converge as distance -> 0) while a long one scatters much more than a
+// pass/shot would at the same distance — the steeper factor only starts to
+// dominate once there's real distance for it to multiply.
+const CROSS_DISTANCE_SPREAD_FACTOR = 0.19;
 const SKILL_SPREAD_FACTOR = 0.03;
 const MIN_SIGMA = 0.08;
 // Skill value treated as "average" — passers above it tighten the spread,
@@ -24,10 +32,10 @@ const MIN_SIGMA = 0.08;
 // currently use as a mid-table skill level.
 const REFERENCE_SKILL = 50;
 
-/** Standard deviation of the landing offset for a kick of this distance struck by a player of this skill. */
-export function landingSpread(distance: number, skill: number): number {
-  const raw =
-    BASE_SPREAD + distance * DISTANCE_SPREAD_FACTOR - (skill - REFERENCE_SKILL) * SKILL_SPREAD_FACTOR;
+/** Standard deviation of the landing offset for a kick of this distance struck by a player of this skill. `isCross` swaps in the steeper CROSS_DISTANCE_SPREAD_FACTOR — see its own comment for why. */
+export function landingSpread(distance: number, skill: number, isCross = false): number {
+  const distanceFactor = isCross ? CROSS_DISTANCE_SPREAD_FACTOR : DISTANCE_SPREAD_FACTOR;
+  const raw = BASE_SPREAD + distance * distanceFactor - (skill - REFERENCE_SKILL) * SKILL_SPREAD_FACTOR;
   return Math.max(MIN_SIGMA, raw);
 }
 
@@ -49,8 +57,8 @@ export interface LandingResult {
 }
 
 /** Samples where a kick aimed at `aim` (struck from `origin`, `distance` units away, by a player of `skill`) actually lands. */
-export function sampleLanding(aim: Vec2, distance: number, skill: number): LandingResult {
-  const sigma = landingSpread(distance, skill);
+export function sampleLanding(aim: Vec2, distance: number, skill: number, isCross = false): LandingResult {
+  const sigma = landingSpread(distance, skill, isCross);
   const dx = gaussian() * sigma;
   const dy = gaussian() * sigma;
   return {
@@ -58,4 +66,11 @@ export function sampleLanding(aim: Vec2, distance: number, skill: number): Landi
     missBy: Math.hypot(dx, dy),
     sigma,
   };
+}
+
+/** A plain-language risk qualifier for a kick's aim spread — the same sigma the aim-ring is sized from. Moved here from the now-deleted kickIntent.ts, which owned it only because it lived next to the other aim-ring label logic; it's really just a derivative of landingSpread's own output. */
+export function riskLabel(sigma: number): string {
+  if (sigma < 0.6) return "Safe";
+  if (sigma < 1.4) return "Risky";
+  return "Very risky";
 }

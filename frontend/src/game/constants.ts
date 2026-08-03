@@ -217,6 +217,11 @@ export const STANCE_AGGRESSIVE_PACE_FACTOR = 0.15;
 export const STANCE_COVER_PASSING_SKILL_FACTOR = 0.15;
 export const STANCE_MAN_MARK_SKILL_FACTOR = 0.1;
 export const STANCE_MAN_MARK_PACE_FACTOR = 0.1;
+// Reuses `jumping` since it's already the dominant header-contest weight
+// (contest.ts's WEIGHTS.header) — "anticipating the ball lets you time your
+// jump better." Applies to whoever has the expecting_header stance
+// regardless of side, same as every other stance bonus.
+export const STANCE_EXPECTING_HEADER_JUMPING_FACTOR = 0.12;
 
 // How strongly a man-marking pawn (with no explicit plannedSteps) is pulled
 // toward its target's live position each tick — 1 would be a blind full

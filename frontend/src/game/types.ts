@@ -71,10 +71,17 @@ export type Stance =
  * the pawn genuinely holds the ball once the chain reaches it — see
  * resolve.ts's tick loop; if they don't, it silently fizzles and the chain
  * just continues to whatever comes after.
+ *
+ * `kick.kind` is the player's own explicit declaration of what this kick is
+ * for — not inferred from geometry (an earlier version guessed shot/pass/
+ * clear from the target's position, purely for a UI label; that guess never
+ * fed back into the resolution engine and has been retired). Only `"cross"`
+ * changes the engine's actual behavior for now (see aim.ts's landingSpread)
+ * — `"shot"`/`"pass"` resolve identically to each other, just labeled.
  */
 export interface PlannedStep {
   pos: Vec2;
-  kick?: { loft: boolean };
+  kick?: { loft: boolean; kind: "shot" | "pass" | "cross" };
 }
 
 export interface Pawn {

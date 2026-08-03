@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { landingSpread } from "../game/aim";
+import { landingSpread, riskLabel } from "../game/aim";
 import {
   CAPTURE_RADIUS,
   CHECKER_CELL_SIZE,
@@ -23,7 +23,6 @@ import {
   VIEW_W,
   type Projector,
 } from "../game/iso";
-import { classifyKickTarget, intentLabel, riskLabel } from "../game/kickIntent";
 import type { Ball, Pawn, PlannedStep, Side, Vec2 } from "../game/types";
 import { EventBus } from "./EventBus";
 
@@ -679,7 +678,6 @@ export class MatchScene extends Phaser.Scene {
     const g = this.overlayGfx;
     g.clear();
     if (!this.state) return;
-    const allPawns = this.state.pawns;
     const p = this.projector;
     let labelShown = false;
     // Graphics are drawn in world space, so a fixed pixel width/radius
@@ -733,7 +731,7 @@ export class MatchScene extends Phaser.Scene {
             // separate guess. A small ring means a safe, reliable kick; a
             // large one means it could land well off where you clicked.
             const kickDist = Math.hypot(step.pos.x - worldCursor.x, step.pos.y - worldCursor.y);
-            const sigma = landingSpread(kickDist, pawn.player.skill);
+            const sigma = landingSpread(kickDist, pawn.player.skill, step.kick.kind === "cross");
             const spreadPts: Vec2[] = [];
             const RING_SEGMENTS = 28;
             for (let a = 0; a <= RING_SEGMENTS; a++) {
@@ -743,11 +741,10 @@ export class MatchScene extends Phaser.Scene {
             g.lineStyle(1.5 / zoom, kickColor, 0.5);
             strokePoly(g, spreadPts, true);
 
-            // Plain-language readout next to the ring: what kind of kick
-            // this is and how risky it actually is, instead of leaving the
-            // ring's size to speak for itself.
-            const intent = classifyKickTarget(step.pos, pawn.side, pawn.id, allPawns);
-            this.kickLabelText.setText(`${intentLabel(intent)}: ${riskLabel(sigma)}`);
+            // Plain-language readout next to the ring: the player's own
+            // declared kick kind (no more geometry-guessing — see the
+            // now-deleted kickIntent.ts) and how risky it actually is.
+            this.kickLabelText.setText(`${KICK_KIND_LABEL[step.kick.kind]}: ${riskLabel(sigma)}`);
             this.kickLabelText.setPosition(to.x, to.y - 26 / zoom);
             this.kickLabelText.setScale(1 / zoom);
             this.kickLabelText.setVisible(true);
@@ -776,6 +773,12 @@ export class MatchScene extends Phaser.Scene {
     if (!labelShown) this.kickLabelText.setVisible(false);
   }
 }
+
+const KICK_KIND_LABEL: Record<"shot" | "pass" | "cross", string> = {
+  shot: "Shot",
+  pass: "Pass",
+  cross: "Cross",
+};
 
 /** Where a pawn's waypoint chain currently leaves it standing — the last MOVEMENT leg's destination, or `from` if the chain is empty or only kicks so far (a kick step doesn't move the pawn, see PlannedStep in types.ts). Mirrors Game.tsx's own copy used for click-gating. */
 function chainEndPosition(from: Vec2, steps: PlannedStep[]): Vec2 {

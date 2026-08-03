@@ -120,6 +120,12 @@ const RESTART_TYPE_LABEL: Record<DeadBallResult["type"], string> = {
   penalty: "Penalty",
 };
 
+const KICK_KIND_LABEL: Record<"shot" | "pass" | "cross", string> = {
+  shot: "Shot",
+  pass: "Pass",
+  cross: "Cross",
+};
+
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
   const homePlayers = pawns.filter((p) => p.side === "home").map((p) => p.player);
   const awayPlayers = pawns.filter((p) => p.side === "away").map((p) => p.player);
@@ -188,6 +194,12 @@ export function Game({ mode, onExitToMenu }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
   const [kickLoft, setKickLoft] = useState(false);
+  // The player's own explicit declaration of what a queued kick is for —
+  // shot/pass resolve identically to each other, only cross changes the
+  // engine's actual accuracy (see aim.ts's landingSpread). Independent of
+  // kickLoft: either axis can combine with the other (a low driven cross,
+  // a chipped shot, ...).
+  const [kickKind, setKickKind] = useState<"shot" | "pass" | "cross">("pass");
   const [stanceMenuOpen, setStanceMenuOpen] = useState(false);
   // True while the player has picked "Man-mark" for the selected pawn and
   // is now expected to click an opponent pawn instead of a cell/destination.
@@ -394,6 +406,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (pawn.side !== controllingSide) return;
     setKickMode(false);
     setKickLoft(false);
+    setKickKind("pass");
     setPickingMarkTarget(false);
     setStanceMenuOpen(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
@@ -409,7 +422,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       setPawns((prev) =>
         prev.map((p) =>
           p.id === selectedPawn.id
-            ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point, kick: { loft: kickLoft } }] }
+            ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point, kick: { loft: kickLoft, kind: kickKind } }] }
             : p
         )
       );
@@ -419,6 +432,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       // stays selected rather than ending the turn here.
       setKickMode(false);
       setKickLoft(false);
+      setKickKind("pass");
       return;
     }
 
@@ -659,6 +673,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setSelectedId(null);
     setKickMode(false);
     setKickLoft(false);
+    setKickKind("pass");
     setPickingMarkTarget(false);
 
     if (mode === "ai") {
@@ -753,11 +768,15 @@ export function Game({ mode, onExitToMenu }: Props) {
                       ? `Cooldown (${selectedPawn.sprintCooldown})`
                       : "Ready"}
                 </div>
-                {selectedPawn.plannedSteps.some((s) => s.kick) && (
-                  <div className="pawn-info-row">
-                    Kick: {selectedPawn.plannedSteps.find((s) => s.kick)!.kick!.loft ? "Loft" : "Ground"}
-                  </div>
-                )}
+                {selectedPawn.plannedSteps.some((s) => s.kick) &&
+                  (() => {
+                    const kick = selectedPawn.plannedSteps.find((s) => s.kick)!.kick!;
+                    return (
+                      <div className="pawn-info-row">
+                        Kick: {KICK_KIND_LABEL[kick.kind]}, {kick.loft ? "Loft" : "Ground"}
+                      </div>
+                    );
+                  })()}
               </div>
             ) : (
               <div className="hud-panel pawn-info pawn-info-empty">No pawn selected</div>
@@ -837,6 +856,31 @@ export function Game({ mode, onExitToMenu }: Props) {
                     </button>
                     <button type="button" className={kickLoft ? "active" : ""} onClick={() => setKickLoft(true)}>
                       Loft
+                    </button>
+                  </div>
+                )}
+                {kickMode && (
+                  <div className="action-row">
+                    <button
+                      type="button"
+                      className={kickKind === "shot" ? "active" : ""}
+                      onClick={() => setKickKind("shot")}
+                    >
+                      Shot
+                    </button>
+                    <button
+                      type="button"
+                      className={kickKind === "pass" ? "active" : ""}
+                      onClick={() => setKickKind("pass")}
+                    >
+                      Pass
+                    </button>
+                    <button
+                      type="button"
+                      className={kickKind === "cross" ? "active" : ""}
+                      onClick={() => setKickKind("cross")}
+                    >
+                      Cross
                     </button>
                   </div>
                 )}

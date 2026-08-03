@@ -5,6 +5,7 @@ import {
   GK_STRETCH_RANGE_PER_JUMPING,
   STANCE_AGGRESSIVE_PACE_FACTOR,
   STANCE_COVER_PASSING_SKILL_FACTOR,
+  STANCE_EXPECTING_HEADER_JUMPING_FACTOR,
   STANCE_MAN_MARK_PACE_FACTOR,
   STANCE_MAN_MARK_SKILL_FACTOR,
 } from "./constants";
@@ -83,6 +84,9 @@ function stanceBonus(pawn: Pawn, against: Pawn | null, kind: ContestKind): numbe
   }
   if (stance.kind === "cover_passing" && kind === "interception") {
     return pawn.player.skill * STANCE_COVER_PASSING_SKILL_FACTOR;
+  }
+  if (stance.kind === "expecting_header" && kind === "header") {
+    return pawn.player.jumping * STANCE_EXPECTING_HEADER_JUMPING_FACTOR;
   }
   if (
     stance.kind === "man_mark" &&

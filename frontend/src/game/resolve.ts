@@ -502,7 +502,7 @@ interface FlightStart {
   mishit: boolean;
 }
 
-function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean): FlightStart {
+function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean, isCross: boolean): FlightStart {
   const dist = distance(carrier.pos, rawTarget);
   const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
   const aim: Vec2 = {
@@ -511,10 +511,11 @@ function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean): FlightStart
   };
   // Where the kick is actually going isn't the aim point itself — it's
   // sampled from a spread around it, tighter for a shorter/more skilled
-  // kick. The flight then travels toward that real landing point exactly
-  // like any other kick: same straight-line path, same tick-by-tick
-  // interception checks. Only the target the flight aims for changes.
-  const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill);
+  // kick (wider still for a cross — see aim.ts's landingSpread). The flight
+  // then travels toward that real landing point exactly like any other
+  // kick: same straight-line path, same tick-by-tick interception checks.
+  // Only the target the flight aims for changes.
+  const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill, isCross);
   const totalDist = Math.max(distance(carrier.pos, landing.point), 1e-6);
   const apexHeight = loft
     ? Math.min(LOFT_APEX_MAX, Math.max(LOFT_APEX_MIN, totalDist * LOFT_APEX_HEIGHT_RATIO))
@@ -985,13 +986,11 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       while (steps[cursor]?.kick) {
         const step = steps[cursor];
         if (p.id === currentCarrierId) {
-          const started = startFlight(p, step.pos, step.kick!.loft);
+          const kind = step.kick!.kind;
+          const started = startFlight(p, step.pos, step.kick!.loft, kind === "cross");
           flight = started.flight;
-          events.push(
-            started.mishit
-              ? `${p.player.name} strikes it, but the ball is off target`
-              : `${p.player.name} strikes the ball`
-          );
+          const verb = kind === "shot" ? "shoots" : kind === "cross" ? "sends in a cross" : "plays a pass";
+          events.push(started.mishit ? `${p.player.name} ${verb}, but it's off target` : `${p.player.name} ${verb}`);
           currentCarrierId = null;
           ballPos = { ...p.pos };
           ballHeight = 0;
