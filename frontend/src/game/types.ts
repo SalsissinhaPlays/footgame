@@ -28,7 +28,7 @@ export type Side = "home" | "away";
 
 /**
  * A standing defensive order for this turn, layered on top of (not instead
- * of) plannedSteps/plannedKick — a pawn can have an explicit destination AND
+ * of) plannedSteps — a pawn can have an explicit chain of waypoints/kicks AND
  * a stance. Left open to future variants (offensive stances, a header-bonus
  * stance once crossing/heights exist) rather than closed off, but only
  * variants with a real mechanic to attach to belong here.
@@ -48,26 +48,39 @@ export type Stance =
   | { kind: "gk_on_line" }
   | { kind: "gk_aggressive" };
 
+/**
+ * One entry in a pawn's waypoint chain. `pos` means different things
+ * depending on `kick`: for an ordinary step, it's a destination to walk to
+ * (part of the pawn's PAWN_MOVE_BUDGET distance); for a kick step, it's the
+ * kick's AIM TARGET, not a place to walk — the kick fires from wherever the
+ * chain has left the pawn by that point (their previous step, or their real
+ * position if it's first), consuming zero movement distance, only a charge
+ * (see constants.ts's KICK_CHARGE_COST). A kick step only actually fires if
+ * the pawn genuinely holds the ball once the chain reaches it — see
+ * resolve.ts's tick loop; if they don't, it silently fizzles and the chain
+ * just continues to whatever comes after.
+ */
+export interface PlannedStep {
+  pos: Vec2;
+  kick?: { loft: boolean };
+}
+
 export interface Pawn {
   id: string;
   player: PlayerDTO;
   side: Side;
   pos: Vec2;
   /**
-   * This turn's waypoint chain — an ordered list of movement destinations, walked in
-   * sequence (each leg capped at PAWN_MOVE_BUDGET distance from wherever the
-   * previous leg ended, gated by the pawn's stamina-derived charge count — see
-   * constants.ts's chargesFor). Empty = no plan this turn, same meaning the old
-   * single `plannedPos: null` had. Built by repeated clicks in Game.tsx, not a
-   * single click-and-replace.
+   * This turn's plan — an ordered chain of movement waypoints and/or kicks,
+   * executed in sequence (see resolve.ts's tick loop). Empty = no plan this
+   * turn, same meaning the old single `plannedPos: null` had. Built by
+   * repeated clicks in Game.tsx, not a single click-and-replace. A kick can
+   * appear anywhere in the sequence, not just at the end — move, kick, then
+   * keep moving is a valid plan.
    */
-  plannedSteps: Vec2[];
-  /** Set instead of a plannedSteps leg when this pawn (must be the ball carrier) kicks/passes this turn. */
-  plannedKick: Vec2 | null;
-  /** Only meaningful when plannedKick !== null: whether this kick is a lofted (airborne) trajectory rather than grounded. Turn-scoped like plannedKick — set alongside it, reset alongside it. */
-  plannedKickLoft: boolean;
+  plannedSteps: PlannedStep[];
   stance: Stance | null;
-  /** This turn's choice to sprint — turn-scoped like plannedSteps/plannedKick/stance. */
+  /** This turn's choice to sprint — turn-scoped like plannedSteps/stance. */
   plannedSprint: boolean;
   /**
    * Turns remaining before sprint can be used again (0 = available). Unlike

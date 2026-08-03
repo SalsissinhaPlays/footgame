@@ -91,12 +91,12 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
     if (pawn.player.position === "GK") {
       const targetY = Math.max(GOAL_ROW_MIN, Math.min(GOAL_ROW_MAX, ball.pos.y));
       const target = { x: home.x + (aiSide === "home" ? 1 : -1), y: targetY };
-      return { ...pawn, plannedSteps: [moveToward(pawn.pos, target, PAWN_MOVE_BUDGET)], plannedKick: null };
+      return { ...pawn, plannedSteps: [{ pos: moveToward(pawn.pos, target, PAWN_MOVE_BUDGET) }] };
     }
 
     if (carrier && pawn.id === carrier.id) {
       if (dist(pawn.pos, goalNet) <= KICK_RANGE && hasClearLane(pawn.pos, goalNet, opponents)) {
-        return { ...pawn, plannedKick: goalNet, plannedSteps: [], plannedKickLoft: false };
+        return { ...pawn, plannedSteps: [{ pos: goalNet, kick: { loft: false } }] };
       }
 
       const passTarget = teammates
@@ -106,21 +106,21 @@ export function planAiTurn(pawns: Pawn[], ball: Ball, aiSide: Side): Pawn[] {
         .sort((a, b) => dist(a.pos, goalLine) - dist(b.pos, goalLine))[0];
 
       if (passTarget) {
-        return { ...pawn, plannedKick: passTarget.pos, plannedSteps: [], plannedKickLoft: false };
+        return { ...pawn, plannedSteps: [{ pos: passTarget.pos, kick: { loft: false } }] };
       }
 
-      return { ...pawn, plannedSteps: [moveToward(pawn.pos, goalLine, PAWN_MOVE_BUDGET)], plannedKick: null };
+      return { ...pawn, plannedSteps: [{ pos: moveToward(pawn.pos, goalLine, PAWN_MOVE_BUDGET) }] };
     }
 
     if (carrier) {
       // Team has the ball: hold a supporting position a little further upfield.
-      return { ...pawn, plannedSteps: [moveToward(pawn.pos, goalLine, 1)], plannedKick: null };
+      return { ...pawn, plannedSteps: [{ pos: moveToward(pawn.pos, goalLine, 1) }] };
     }
 
     if (pawn.id === closestChaserId) {
-      return { ...pawn, plannedSteps: [moveToward(pawn.pos, ball.pos, PAWN_MOVE_BUDGET)], plannedKick: null };
+      return { ...pawn, plannedSteps: [{ pos: moveToward(pawn.pos, ball.pos, PAWN_MOVE_BUDGET) }] };
     }
 
-    return { ...pawn, plannedSteps: [moveToward(pawn.pos, home, 1)], plannedKick: null };
+    return { ...pawn, plannedSteps: [{ pos: moveToward(pawn.pos, home, 1) }] };
   });
 }

@@ -28,7 +28,7 @@ export const SETUP_TURNS_BY_TYPE: Record<DeadBallResult["type"], number> = {
  * no kick/carrier/tackle/save/reaction machinery to run at all here, just
  * movement (plus man-mark's auto-aim) with the ball sitting dead at a fixed
  * spot for the whole turn. Kicking is disabled by the UI during setup (see
- * Game.tsx), so plannedKick is never read here.
+ * Game.tsx), so a PlannedStep's `kick` field is never read here — only `pos`.
  *
  * Collision is a simplified, sequential single pass (process pawns in array
  * order, take the first non-colliding candidate heading, otherwise stay put)
@@ -48,7 +48,7 @@ export function resolveSetupTurn(pawns: Pawn[], deadBallSpot: Vec2): ResolveSnap
   let current = pawns.map((p) => ({ ...p }));
   const snapshots: ResolveSnapshot[] = [];
   const hasExplicitPlan = new Set(current.filter((p) => p.plannedSteps.length > 0).map((p) => p.id));
-  const destinations = new Map<string, Vec2>(current.map((p) => [p.id, p.plannedSteps[0] ?? p.pos]));
+  const destinations = new Map<string, Vec2>(current.map((p) => [p.id, p.plannedSteps[0]?.pos ?? p.pos]));
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
     for (const p of current) {

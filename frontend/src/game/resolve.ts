@@ -24,6 +24,7 @@ import {
   HEADER_DIFFICULTY_THRESHOLD,
   HEADER_RADIUS,
   HEADER_REACH_HEIGHT,
+  KICK_CHARGE_COST,
   KICK_RANGE,
   LOFT_APEX_HEIGHT_RATIO,
   LOFT_APEX_MAX,
@@ -51,7 +52,7 @@ import { sampleLanding } from "./aim";
 import { resolveContest, resolveContestDetailed, rollHeaderAttempt, rollSaveAttempt } from "./contest";
 import type { ContestKind } from "./contest";
 import { attemptsReaction } from "./reactions";
-import type { Ball, Pawn, PlayerDTO, Side, Vec2 } from "./types";
+import type { Ball, Pawn, PlannedStep, PlayerDTO, Side, Vec2 } from "./types";
 
 /**
  * How many separate waypoints a pawn's fixed PAWN_MOVE_BUDGET can be split
@@ -65,29 +66,41 @@ export function chargesFor(player: PlayerDTO): number {
 }
 
 /**
- * Defensive clamp on a pawn's requested waypoint chain: at most `maxLegs`
- * waypoints (see chargesFor), and the cumulative distance from `from`
- * through every kept waypoint in order never exceeds `maxTotalDistance` —
- * the same fixed PAWN_MOVE_BUDGET a single-destination plan always had, not
- * extended just because it's now split across several legs. Mirrors
- * startFlight's KICK_RANGE clamp: the UI is expected to already gate this
- * when building a chain, but resolveTurn shouldn't silently trust an input
- * that claims more legs or more total distance than the pawn actually has.
- * Stops at the first waypoint that would break either limit, rather than
- * partially clamping it — the UI never produces that shape, so simplicity
- * wins over precision for this fallback.
+ * Defensive clamp on a pawn's requested plan: total spent charges never
+ * exceeds `maxCharges` (a movement leg costs 1, a kick step costs
+ * KICK_CHARGE_COST — see chargesFor/constants.ts), and the cumulative
+ * MOVEMENT distance from `from` through every kept leg in order never
+ * exceeds `maxTotalDistance` — the same fixed PAWN_MOVE_BUDGET a
+ * single-destination plan always had, not extended just because it's now
+ * split across several legs (kick steps don't consume any of this — see
+ * PlannedStep). Mirrors startFlight's KICK_RANGE clamp: the UI is expected
+ * to already gate this when building a chain, but resolveTurn shouldn't
+ * silently trust an input that claims more actions or distance than the
+ * pawn actually has. Stops at the first step that would break either limit,
+ * rather than partially clamping it — the UI never produces that shape, so
+ * simplicity wins over precision for this fallback.
  */
-function clampStepsToBudget(from: Vec2, steps: Vec2[], maxLegs: number, maxTotalDistance: number): Vec2[] {
-  const clamped: Vec2[] = [];
+function clampStepsToBudget(
+  from: Vec2,
+  steps: PlannedStep[],
+  maxCharges: number,
+  maxTotalDistance: number
+): PlannedStep[] {
+  const clamped: PlannedStep[] = [];
   let cursor = from;
-  let remaining = maxTotalDistance;
+  let remainingDistance = maxTotalDistance;
+  let chargesUsed = 0;
   for (const step of steps) {
-    if (clamped.length >= maxLegs) break;
-    const legDist = distance(cursor, step);
-    if (legDist > remaining) break;
+    const cost = step.kick ? KICK_CHARGE_COST : 1;
+    if (chargesUsed + cost > maxCharges) break;
+    if (!step.kick) {
+      const legDist = distance(cursor, step.pos);
+      if (legDist > remainingDistance) break;
+      remainingDistance -= legDist;
+      cursor = step.pos;
+    }
     clamped.push(step);
-    remaining -= legDist;
-    cursor = step;
+    chargesUsed += cost;
   }
   return clamped;
 }
@@ -340,14 +353,17 @@ export function candidateHeadings(pos: Vec2, dest: Vec2, speed: number = PAWN_SP
  * predict movement exactly. Deliberately ignores dynamic per-tick effects
  * (sprint/pressure): a pawn who ends up slowed simply doesn't finish its plan
  * by turn's end, the same accepted degradation a single blocked leg already
- * has today.
+ * has today. Kick steps consume zero ticks — their `pos` is an aim target,
+ * not a place walked to (see PlannedStep in types.ts) — so they don't
+ * advance `cursor` or add to the distance total.
  */
-function ticksForSteps(from: Vec2, steps: Vec2[]): number {
+function ticksForSteps(from: Vec2, steps: PlannedStep[]): number {
   let total = 0;
   let cursor = from;
   for (const step of steps) {
-    total += distance(cursor, step);
-    cursor = step;
+    if (step.kick) continue;
+    total += distance(cursor, step.pos);
+    cursor = step.pos;
   }
   return Math.ceil(total / PAWN_SPEED_PER_TICK);
 }
@@ -455,7 +471,7 @@ interface FlightStart {
   mishit: boolean;
 }
 
-function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
+function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean): FlightStart {
   const dist = distance(carrier.pos, rawTarget);
   const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
   const aim: Vec2 = {
@@ -469,7 +485,7 @@ function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
   // interception checks. Only the target the flight aims for changes.
   const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill);
   const totalDist = Math.max(distance(carrier.pos, landing.point), 1e-6);
-  const apexHeight = carrier.plannedKickLoft
+  const apexHeight = loft
     ? Math.min(LOFT_APEX_MAX, Math.max(LOFT_APEX_MIN, totalDist * LOFT_APEX_HEIGHT_RATIO))
     : 0;
   return {
@@ -494,11 +510,11 @@ function startFlight(carrier: Pawn, rawTarget: Vec2): FlightStart {
  * apexHeight is always 0 — headers stay grounded this pass, deliberately no
  * header-off-a-header (see checkHeader's and the tick loop's doc comments).
  * A standalone function rather than a helper shared with startFlight — the
- * two have different calling shapes (one reads plannedKickLoft off a
- * carrier Pawn, the other starts from a bare contact point with no carrier/
- * loft concept at all), and this codebase already keeps similarly-shaped-
- * but-distinct logic separate elsewhere rather than force a shared
- * abstraction onto it.
+ * two have different calling shapes (one starts from a carrier Pawn with an
+ * explicit loft flag, the other starts from a bare contact point with no
+ * carrier/loft concept at all), and this codebase already keeps
+ * similarly-shaped-but-distinct logic separate elsewhere rather than force a
+ * shared abstraction onto it.
  */
 function startHeaderFlight(winner: Pawn, contactPoint: Vec2, rawTarget: Vec2): FlightStart {
   const dist = distance(contactPoint, rawTarget);
@@ -855,36 +871,25 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   // recovering its own loose ball, which shouldn't interrupt resolution.
   let lastControllingSide: Side | null = carrier?.side ?? null;
 
-  if (carrier && carrier.plannedKick) {
-    const started = startFlight(carrier, carrier.plannedKick);
-    flight = started.flight;
-    events.push(
-      started.mishit
-        ? `${carrier.player.name} strikes it, but the ball is off target`
-        : `${carrier.player.name} strikes the ball`
-    );
-    // The kicker releases the ball and stays put; nobody else's plan changes.
-    current = current.map((p) =>
-      p.id === carrier.id ? { ...p, plannedSteps: [], plannedKick: null, plannedKickLoft: false } : p
-    );
-    currentCarrierId = null;
-  }
-
-  // Each pawn's plan is now a CHAIN of waypoints (plannedSteps), not one
-  // destination — captured here, once, before the tick loop starts clearing
-  // plannedSteps every tick for display hygiene (see the end-of-tick reset
-  // below). stepCursor tracks which waypoint each pawn is currently walking
-  // toward; currentStepTarget is what `destinations` gets refreshed from at
-  // the top of every tick (below), same as the chasing/man-mark/GK blocks
-  // already refresh it for their own cases — a pawn arriving at its current
-  // waypoint just advances the cursor to the next one, going through the
-  // exact same candidateHeadings/collision machinery any planned move always
-  // did.
-  const plannedStepsById = new Map<string, Vec2[]>(current.map((p) => [p.id, p.plannedSteps]));
+  // Each pawn's plan is now a CHAIN of waypoints and/or kicks (plannedSteps),
+  // not one destination or one up-front kick — captured here, once, before
+  // the tick loop starts clearing plannedSteps every tick for display
+  // hygiene (see the end-of-tick reset below). stepCursor tracks which step
+  // each pawn is currently working through; currentStepTarget is what
+  // `destinations` gets refreshed from at the top of every tick (below,
+  // skipping over kick steps — they're not movement targets), same as the
+  // chasing/man-mark/GK blocks already refresh it for their own cases. A
+  // pawn arriving at its current MOVEMENT step just advances the cursor to
+  // the next one, going through the exact same candidateHeadings/collision
+  // machinery any planned move always did. Kick steps are handled entirely
+  // separately, at the very top of each tick (see below) — unlike a
+  // movement leg, a kick doesn't take time to "arrive" at, it just fires (or
+  // fizzles) the moment the chain reaches it.
+  const plannedStepsById = new Map<string, PlannedStep[]>(current.map((p) => [p.id, p.plannedSteps]));
   const stepCursor = new Map<string, number>(current.map((p) => [p.id, 0]));
   function currentStepTarget(p: Pawn): Vec2 {
     const steps = plannedStepsById.get(p.id)!;
-    return steps[stepCursor.get(p.id)!] ?? p.pos;
+    return steps[stepCursor.get(p.id)!]?.pos ?? p.pos;
   }
 
   const destinations = new Map(current.map((p) => [p.id, currentStepTarget(p)]));
@@ -912,11 +917,45 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   const totalTicks = Math.max(MOVE_RANGE, ...current.map((p) => ticksForSteps(p.pos, p.plannedSteps)));
 
   for (let tick = 0; tick < totalTicks; tick++) {
+    // Kick steps are instantaneous actions (their `pos` is an aim target,
+    // not a place to walk — see PlannedStep), so they're resolved here,
+    // before this tick's movement, rather than through the step cursor's
+    // usual arrival-based advancement. A pawn whose current step is a kick
+    // either fires it now — if they're genuinely the ball carrier at this
+    // exact moment — or has it silently fizzle — if they're not, their plan
+    // assumed possession they don't actually have — and moves straight on
+    // to whatever comes after, without spending a tick either way. Only the
+    // actual carrier's id can ever match `currentCarrierId`, so at most one
+    // kick fires per tick regardless of how many pawns have one queued.
+    for (const p of current) {
+      if (!hasExplicitPlan.has(p.id)) continue;
+      const steps = plannedStepsById.get(p.id)!;
+      let cursor = stepCursor.get(p.id)!;
+      while (steps[cursor]?.kick) {
+        const step = steps[cursor];
+        if (p.id === currentCarrierId) {
+          const started = startFlight(p, step.pos, step.kick!.loft);
+          flight = started.flight;
+          events.push(
+            started.mishit
+              ? `${p.player.name} strikes it, but the ball is off target`
+              : `${p.player.name} strikes the ball`
+          );
+          currentCarrierId = null;
+          ballPos = { ...p.pos };
+          ballHeight = 0;
+        }
+        cursor++;
+        stepCursor.set(p.id, cursor);
+      }
+    }
+
     // Refresh each explicitly-planned pawn's target from wherever its step
     // cursor currently points (advanced below, once this tick's movement has
-    // resolved, if they've arrived at it). Pawns without an explicit plan
-    // keep whatever `destinations` already holds for them — their own
-    // position, or a man-mark/GK auto-target the next two blocks refresh.
+    // resolved, if they've arrived at it, or just above for a kick step).
+    // Pawns without an explicit plan keep whatever `destinations` already
+    // holds for them — their own position, or a man-mark/GK auto-target the
+    // next two blocks refresh.
     for (const p of current) {
       if (hasExplicitPlan.has(p.id)) destinations.set(p.id, currentStepTarget(p));
     }
@@ -1113,18 +1152,21 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
 
     current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedSteps: [] }));
 
-    // A pawn that's arrived at its current waypoint (within floating-point
-    // tolerance — candidateHeadings clamps a tick's step to exactly close
-    // the remaining distance once it's within reach) advances to the next
-    // one for subsequent ticks. Only meaningful for explicitly-planned pawns
-    // — man-mark/GK auto-targets are recomputed fresh every tick regardless
-    // and never consume a "step."
+    // A pawn that's arrived at its current MOVEMENT waypoint (within
+    // floating-point tolerance — candidateHeadings clamps a tick's step to
+    // exactly close the remaining distance once it's within reach) advances
+    // to the next step for subsequent ticks. Only meaningful for
+    // explicitly-planned pawns — man-mark/GK auto-targets are recomputed
+    // fresh every tick regardless and never consume a "step." `target` can
+    // never be a kick step here — those are already consumed at the top of
+    // this same tick, before movement ran (see above) — the `!target.kick`
+    // guard is defensive only.
     for (const p of current) {
       if (!hasExplicitPlan.has(p.id)) continue;
       const steps = plannedStepsById.get(p.id)!;
       const cursor = stepCursor.get(p.id)!;
       const target = steps[cursor];
-      if (target && distance(p.pos, target) < 1e-6) {
+      if (target && !target.kick && distance(p.pos, target.pos) < 1e-6) {
         stepCursor.set(p.id, cursor + 1);
       }
     }
@@ -1148,7 +1190,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         if (outcome.result === "goal") {
           ballPos = crossing.point;
           events.push(crossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
-          const frozen = current.map((p) => ({ ...p, plannedSteps: [], plannedKick: null }));
+          const frozen = current.map((p) => ({ ...p, plannedSteps: [] }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
           return { snapshots, goal: crossing.side, deadBall: null };
         }
@@ -1312,7 +1354,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         const outcome = attemptSave(current, rollCrossing.side, rollCrossing.point, 0);
         if (outcome.result === "goal") {
           events.push(rollCrossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
-          const frozen = current.map((p) => ({ ...p, plannedSteps: [], plannedKick: null }));
+          const frozen = current.map((p) => ({ ...p, plannedSteps: [] }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
           return { snapshots, goal: rollCrossing.side, deadBall: null };
         }

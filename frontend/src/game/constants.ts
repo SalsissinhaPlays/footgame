@@ -175,6 +175,13 @@ export const PAWN_MOVE_BUDGET = MOVE_RANGE * PAWN_SPEED_PER_TICK;
 export const STAMINA_CHARGES_BASE = 1;
 export const STAMINA_PER_BONUS_CHARGE = 25;
 
+// How many charges a kick step spends when queued into a chain (see
+// PlannedStep in types.ts) — a kick costs no movement distance (it doesn't
+// walk anywhere), but it's still an action competing for the same per-turn
+// charge budget as a movement leg. Same cost as one leg for simplicity;
+// a starting point for playtesting like every other tunable here.
+export const KICK_CHARGE_COST = 1;
+
 // How close an opponent has to get to a dribbling ball carrier before they
 // can attempt a tackle — a bit more generous than PAWN_COLLISION_RADIUS
 // since this represents a boot reaching in, not the pawns' bodies overlapping.

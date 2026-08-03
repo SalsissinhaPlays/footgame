@@ -5,6 +5,7 @@ import {
   BALL_START,
   GRID_COLS,
   GRID_ROWS,
+  KICK_CHARGE_COST,
   KICK_RANGE,
   OOB_CELLS,
   PAWN_MOVE_BUDGET,
@@ -17,7 +18,7 @@ import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } fro
 import { chargesFor, resolveTurn } from "../game/resolve";
 import type { DeadBallResult } from "../game/resolve";
 import { resolveSetupTurn, SETUP_TURNS_BY_TYPE } from "../game/restartSetup";
-import type { Ball, Pawn, Stance, TeamDTO, Vec2 } from "../game/types";
+import type { Ball, Pawn, PlannedStep, Stance, TeamDTO, Vec2 } from "../game/types";
 import type { MatchCallbacks } from "../phaser/MatchScene";
 import { MatchScene } from "../phaser/MatchScene";
 import { PhaserGame } from "../phaser/PhaserGame";
@@ -36,15 +37,25 @@ function euclideanDistance(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-/** Cumulative distance from `from` through every waypoint in `steps`, in order — how much of a pawn's fixed PAWN_MOVE_BUDGET a chain-so-far has already spent. */
-function totalPlannedDistance(from: Vec2, steps: Vec2[]): number {
+/** Cumulative distance from `from` through every MOVEMENT leg in `steps`, in order — how much of a pawn's fixed PAWN_MOVE_BUDGET a chain-so-far has already spent. Kick steps don't move the pawn, so they're skipped (see PlannedStep). */
+function totalPlannedDistance(from: Vec2, steps: PlannedStep[]): number {
   let total = 0;
   let cursor = from;
   for (const step of steps) {
-    total += euclideanDistance(cursor, step);
-    cursor = step;
+    if (step.kick) continue;
+    total += euclideanDistance(cursor, step.pos);
+    cursor = step.pos;
   }
   return total;
+}
+
+/** Where the chain currently leaves the pawn standing — the last MOVEMENT leg's destination, or `from` if the chain is empty or only kicks so far (a kick doesn't move the pawn). */
+function chainEndPosition(from: Vec2, steps: PlannedStep[]): Vec2 {
+  let cursor = from;
+  for (const step of steps) {
+    if (!step.kick) cursor = step.pos;
+  }
+  return cursor;
 }
 
 function inBounds(pos: Vec2): boolean {
@@ -323,34 +334,40 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
-  const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
-  const selectedIsCarrier = !!selectedPawn && isCarrier(selectedPawn);
 
   // A pawn's WHOLE-turn move budget — unchanged in total amount by chaining
   // waypoints, same as it always was for a single destination. Charges (see
-  // resolve.ts's chargesFor) only gate how many separate legs that SAME
-  // fixed budget can be split into, not how far it reaches in total.
+  // resolve.ts's chargesFor) gate how many separate ACTIONS (movement legs
+  // OR kicks) the turn can be split into; only movement legs spend any of
+  // the distance budget — a kick is an action, not a place walked to.
   const moveBudget = selectedPawn?.plannedSprint ? PAWN_MOVE_BUDGET * SPRINT_SPEED_MULTIPLIER : PAWN_MOVE_BUDGET;
   const totalCharges = selectedPawn ? chargesFor(selectedPawn.player) : 0;
-  const chargesUsed = selectedPawn?.plannedSteps.length ?? 0;
+  const chargesUsed = selectedPawn
+    ? selectedPawn.plannedSteps.reduce((sum, s) => sum + (s.kick ? KICK_CHARGE_COST : 1), 0)
+    : 0;
   const chargesRemaining = totalCharges - chargesUsed;
   const distanceUsed = selectedPawn ? totalPlannedDistance(selectedPawn.pos, selectedPawn.plannedSteps) : 0;
   const distanceRemaining = moveBudget - distanceUsed;
-  // The reach-circle overlay draws at whatever's left of the total budget —
-  // shrinking as more of the chain gets spent — from wherever the chain
-  // currently ends (see MatchScene's updateReachHighlight). Kicks don't
-  // spend a charge yet (Increment 2's job) and always measure from the
-  // pawn's actual position, not a hypothetical chain end.
+  // Wherever the chain currently leaves the pawn standing — a kick step
+  // doesn't move them, so it doesn't advance this; only a movement leg does.
+  const chainEnd = selectedPawn ? chainEndPosition(selectedPawn.pos, selectedPawn.plannedSteps) : null;
+  // The reach-circle overlay draws at whatever's left of the relevant
+  // budget, from wherever the chain currently ends — a kick doesn't require
+  // ALREADY holding the ball (a chain can walk to it first; see resolve.ts's
+  // tick loop for how a kick step silently fizzles if that bet doesn't pay
+  // off), so Kick mode is only gated by having a spare charge, same as Move.
   const reachRadius = selectedPawn
-    ? kickMode && selectedIsCarrier
-      ? KICK_RANGE
+    ? kickMode
+      ? chargesRemaining >= KICK_CHARGE_COST
+        ? KICK_RANGE
+        : null
       : chargesRemaining > 0 && distanceRemaining > 0
         ? distanceRemaining
         : null
     : null;
 
   // Clicking within this distance of the chain's current end (or the pawn's
-  // own position, with no waypoints yet) undoes the last waypoint instead of
+  // own position, with no waypoints yet) undoes the last step instead of
   // adding a new one — the continuous equivalent of "clicking the cell
   // you're already standing on."
   const CANCEL_CLICK_EPS = 0.5;
@@ -377,24 +394,24 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   function handleFieldClick(point: Vec2) {
     if (resolving) return;
-    if (!selectedPawn) return;
+    if (!selectedPawn || !chainEnd) return;
     if (!inBounds(point)) return;
 
-    if (kickMode && selectedIsCarrier) {
-      if (reachRadius === null || euclideanDistance(selectedPawn.pos, point) > reachRadius) return;
+    if (kickMode) {
+      if (reachRadius === null || euclideanDistance(chainEnd, point) > reachRadius) return;
       setPawns((prev) =>
         prev.map((p) =>
           p.id === selectedPawn.id
-            ? { ...p, plannedKick: point, plannedSteps: [], plannedKickLoft: kickLoft }
+            ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point, kick: { loft: kickLoft } }] }
             : p
         )
       );
-      // A kick fully commits the pawn's turn — unlike a move click, which
-      // stays selected so the next click can extend the same chain.
-      setSelectedId(null);
+      // Back to Move for whatever comes next — a pawn can't queue a second
+      // kick right behind the first (they no longer have the ball once this
+      // one fires), but they can still plan movement afterward, so the pawn
+      // stays selected rather than ending the turn here.
       setKickMode(false);
       setKickLoft(false);
-      setPickingMarkTarget(false);
       return;
     }
 
@@ -403,9 +420,8 @@ export function Game({ mode, onExitToMenu }: Props) {
     // real position — that's what lets repeated clicks keep chaining rather
     // than always replacing a single destination.
     const steps = selectedPawn.plannedSteps;
-    const origin = steps.length > 0 ? steps[steps.length - 1] : selectedPawn.pos;
 
-    if (euclideanDistance(origin, point) < CANCEL_CLICK_EPS) {
+    if (euclideanDistance(chainEnd, point) < CANCEL_CLICK_EPS) {
       if (steps.length > 0) {
         setPawns((prev) =>
           prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p))
@@ -415,14 +431,10 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
 
     if (chargesRemaining <= 0) return;
-    if (euclideanDistance(origin, point) > distanceRemaining) return;
+    if (euclideanDistance(chainEnd, point) > distanceRemaining) return;
 
     setPawns((prev) =>
-      prev.map((p) =>
-        p.id === selectedPawn.id
-          ? { ...p, plannedSteps: [...p.plannedSteps, point], plannedKick: null, plannedKickLoft: false }
-          : p
-      )
+      prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point }] } : p))
     );
     // Deliberately stays selected — the pawn keeps taking clicks to extend
     // its chain until the player selects someone/something else.
@@ -632,7 +644,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
 
     if (mode === "solo") {
-      // No opponent to plan for — the away side just never gets a plannedSteps/plannedKick.
+      // No opponent to plan for — the away side just never gets a plannedSteps chain.
       await resolveWithPawns(pawns);
       return;
     }
@@ -717,8 +729,10 @@ export function Game({ mode, onExitToMenu }: Props) {
                       ? `Cooldown (${selectedPawn.sprintCooldown})`
                       : "Ready"}
                 </div>
-                {selectedPawn.plannedKick && (
-                  <div className="pawn-info-row">Kick: {selectedPawn.plannedKickLoft ? "Loft" : "Ground"}</div>
+                {selectedPawn.plannedSteps.some((s) => s.kick) && (
+                  <div className="pawn-info-row">
+                    Kick: {selectedPawn.plannedSteps.find((s) => s.kick)!.kick!.loft ? "Loft" : "Ground"}
+                  </div>
                 )}
               </div>
             ) : (
@@ -786,13 +800,13 @@ export function Game({ mode, onExitToMenu }: Props) {
                   <button
                     type="button"
                     className={kickMode ? "active" : ""}
-                    disabled={!selectedIsCarrier || restartSetup !== null}
+                    disabled={chargesRemaining < KICK_CHARGE_COST || restartSetup !== null}
                     onClick={() => setKickMode(true)}
                   >
                     Kick
                   </button>
                 </div>
-                {kickMode && selectedIsCarrier && (
+                {kickMode && (
                   <div className="action-row">
                     <button type="button" className={!kickLoft ? "active" : ""} onClick={() => setKickLoft(false)}>
                       Ground

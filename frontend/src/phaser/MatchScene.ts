@@ -24,7 +24,7 @@ import {
   type Projector,
 } from "../game/iso";
 import { classifyKickTarget, intentLabel, riskLabel } from "../game/kickIntent";
-import type { Ball, Pawn, Side, Vec2 } from "../game/types";
+import type { Ball, Pawn, PlannedStep, Side, Vec2 } from "../game/types";
 import { EventBus } from "./EventBus";
 
 export interface MatchSyncState {
@@ -89,9 +89,10 @@ export class MatchScene extends Phaser.Scene {
   private ballSprite!: Phaser.GameObjects.Image;
   private lastBallPos: Vec2 = { x: -999, y: -999 };
   private pawnVisuals = new Map<string, PawnVisual>();
-  // A single reusable label for the planned kick's aim-risk readout — at
-  // most one pawn (the ball carrier) can have a plannedKick at a time, so
-  // there's never a need for more than one of these.
+  // A single reusable label for a planned kick step's aim-risk readout —
+  // sized for the common case of at most one queued kick actually mattering
+  // on screen at once; if more than one controlled pawn has a kick step
+  // queued, whichever is drawn last simply wins the shared label.
   private kickLabelText!: Phaser.GameObjects.Text;
   // Live readout of the ball's current height, shown only while it's
   // actually off the ground (a lofted kick in flight) — hidden the rest of
@@ -406,14 +407,12 @@ export class MatchScene extends Phaser.Scene {
     const selectedPawn = pawns.find((pw) => pw.id === selectedId);
     if (!selectedPawn) return;
     const p = this.projector;
-    // Move mode's reach circle extends from wherever the chain currently
-    // ends (the last already-planned waypoint), not always the pawn's real
-    // position — each click adds a leg from there, not from the start.
-    // Kick mode always measures from the pawn's actual position: a kick
-    // isn't part of a waypoint chain (see resolve.ts), it replaces movement
-    // entirely for the turn, exactly as it always has.
-    const steps = selectedPawn.plannedSteps;
-    const origin = kickMode || steps.length === 0 ? selectedPawn.pos : steps[steps.length - 1];
+    // Both Move and Kick mode's reach circle extend from wherever the chain
+    // currently leaves the pawn standing — a movement leg advances that
+    // point, a kick step doesn't (see resolve.ts's PlannedStep: a kick's
+    // `pos` is an aim target, not a place walked to, so it fires from
+    // wherever the chain already put the pawn).
+    const origin = chainEndPosition(selectedPawn.pos, selectedPawn.plannedSteps);
     const cx = origin.x + 0.5;
     const cy = origin.y + 0.5;
     const reachPts = isoCircle(p, cx, cy, reachRadius);
@@ -435,8 +434,8 @@ export class MatchScene extends Phaser.Scene {
     const goalLineX = selectedPawn.side === "home" ? GRID_COLS : 0;
     const goalYTop = GOAL_ROW_MIN;
     const goalYBottom = GOAL_ROW_MAX + 1;
-    const closestGoalY = Math.max(goalYTop, Math.min(goalYBottom, selectedPawn.pos.y));
-    const distToGoal = Math.hypot(goalLineX - selectedPawn.pos.x, closestGoalY - selectedPawn.pos.y);
+    const closestGoalY = Math.max(goalYTop, Math.min(goalYBottom, origin.y));
+    const distToGoal = Math.hypot(goalLineX - origin.x, closestGoalY - origin.y);
     if (distToGoal <= reachRadius) {
       const depth = selectedPawn.side === "home" ? -GOAL_TINT_DEPTH : GOAL_TINT_DEPTH;
       const shotZone = [
@@ -453,7 +452,7 @@ export class MatchScene extends Phaser.Scene {
 
     for (const mate of pawns) {
       if (mate.side !== selectedPawn.side || mate.id === selectedPawn.id) continue;
-      if (Math.hypot(mate.pos.x - selectedPawn.pos.x, mate.pos.y - selectedPawn.pos.y) > reachRadius) continue;
+      if (Math.hypot(mate.pos.x - origin.x, mate.pos.y - origin.y) > reachRadius) continue;
       const haloPts = isoCircle(p, mate.pos.x + 0.5, mate.pos.y + 0.5, PASS_HALO_RADIUS);
       g.fillStyle(0x43a047, 0.4);
       fillPoly(g, haloPts);
@@ -516,7 +515,7 @@ export class MatchScene extends Phaser.Scene {
       const visible =
         pawn.side === controllingSide
           ? pawn
-          : { ...pawn, plannedSteps: [], plannedKick: null, stance: null, plannedSprint: false };
+          : { ...pawn, plannedSteps: [], stance: null, plannedSprint: false };
       let visual = this.pawnVisuals.get(pawn.id);
       if (!visual) {
         visual = this.createPawnVisual(pawn);
@@ -680,6 +679,7 @@ export class MatchScene extends Phaser.Scene {
     const g = this.overlayGfx;
     g.clear();
     if (!this.state) return;
+    const allPawns = this.state.pawns;
     const p = this.projector;
     let labelShown = false;
     // Graphics are drawn in world space, so a fixed pixel width/radius
@@ -703,74 +703,87 @@ export class MatchScene extends Phaser.Scene {
         }
       }
       if (pawn.plannedSteps.length > 0) {
-        // A full waypoint chain draws as a connected polyline — one segment
-        // per leg — with a small marker at each intermediate waypoint and
-        // the same full "destination" ellipse only at the final one, so the
-        // last stop in the chain still reads the same way a single planned
-        // move always did.
+        // A full plan draws as a connected sequence — movement legs as a
+        // polyline (small marker at an intermediate stop, a full
+        // "destination" ellipse at a stopping point: the last step overall,
+        // or right before a queued kick), kick steps with the same
+        // aim-preview styling a kick has always had. `from`/`worldCursor`
+        // only advance on a movement leg — a kick step fires from wherever
+        // the chain already left the pawn, not from its own `pos` (that's
+        // the kick's AIM target, see PlannedStep in types.ts), so drawing it
+        // must NOT walk the cursor forward.
         let from = base;
+        let worldCursor: Vec2 = { x: pawn.pos.x, y: pawn.pos.y };
         pawn.plannedSteps.forEach((step, i) => {
-          const to = p.toIso(step.x + 0.5, step.y + 0.5);
-          g.lineStyle(2.5, 0xffeb3b, 1);
-          g.lineBetween(from.x, from.y, to.x, to.y);
-          g.fillStyle(pawn.side === "home" ? 0x1565c0 : 0xc62828, 0.35);
-          g.lineStyle(2, 0xffeb3b, 1);
-          if (i === pawn.plannedSteps.length - 1) {
-            g.fillEllipse(to.x, to.y, 32, 16);
-            g.strokeEllipse(to.x, to.y, 32, 16);
+          const to = p.toIso(step.pos.x + 0.5, step.pos.y + 0.5);
+          if (step.kick) {
+            // Lofted kicks get a distinct color from grounded ones, so the
+            // planning preview already hints that this ball will sail over
+            // defenders rather than along the ground.
+            const kickColor = step.kick.loft ? 0x29b6f6 : 0xef6c00;
+            g.lineStyle(3 / zoom, kickColor, 1);
+            g.lineBetween(from.x, from.y, to.x, to.y);
+            g.fillStyle(kickColor, 1);
+            g.fillCircle(to.x, to.y, 7 / zoom);
+
+            // Aim-spread preview: a ring around the target sized by how
+            // precise this exact kick actually is (distance + the kicker's
+            // skill), using the same formula the resolution engine samples
+            // the real landing point from — a true preview of risk, not a
+            // separate guess. A small ring means a safe, reliable kick; a
+            // large one means it could land well off where you clicked.
+            const kickDist = Math.hypot(step.pos.x - worldCursor.x, step.pos.y - worldCursor.y);
+            const sigma = landingSpread(kickDist, pawn.player.skill);
+            const spreadPts: Vec2[] = [];
+            const RING_SEGMENTS = 28;
+            for (let a = 0; a <= RING_SEGMENTS; a++) {
+              const angle = (a / RING_SEGMENTS) * Math.PI * 2;
+              spreadPts.push(p.toIso(step.pos.x + 0.5 + Math.cos(angle) * sigma, step.pos.y + 0.5 + Math.sin(angle) * sigma));
+            }
+            g.lineStyle(1.5 / zoom, kickColor, 0.5);
+            strokePoly(g, spreadPts, true);
+
+            // Plain-language readout next to the ring: what kind of kick
+            // this is and how risky it actually is, instead of leaving the
+            // ring's size to speak for itself.
+            const intent = classifyKickTarget(step.pos, pawn.side, pawn.id, allPawns);
+            this.kickLabelText.setText(`${intentLabel(intent)}: ${riskLabel(sigma)}`);
+            this.kickLabelText.setPosition(to.x, to.y - 26 / zoom);
+            this.kickLabelText.setScale(1 / zoom);
+            this.kickLabelText.setVisible(true);
+            labelShown = true;
+            // from/worldCursor deliberately NOT advanced — the chain
+            // continues from the same spot the kick fired from.
           } else {
-            g.fillCircle(to.x, to.y, 6 / zoom);
-            g.strokeCircle(to.x, to.y, 6 / zoom);
+            g.lineStyle(2.5, 0xffeb3b, 1);
+            g.lineBetween(from.x, from.y, to.x, to.y);
+            g.fillStyle(pawn.side === "home" ? 0x1565c0 : 0xc62828, 0.35);
+            g.lineStyle(2, 0xffeb3b, 1);
+            const isStop = i === pawn.plannedSteps.length - 1 || pawn.plannedSteps[i + 1]?.kick;
+            if (isStop) {
+              g.fillEllipse(to.x, to.y, 32, 16);
+              g.strokeEllipse(to.x, to.y, 32, 16);
+            } else {
+              g.fillCircle(to.x, to.y, 6 / zoom);
+              g.strokeCircle(to.x, to.y, 6 / zoom);
+            }
+            from = to;
+            worldCursor = step.pos;
           }
-          from = to;
         });
-      }
-      if (pawn.plannedKick) {
-        const kick = p.toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5);
-        // Lofted kicks get a distinct color from grounded ones, so the
-        // planning preview already hints that this ball will sail over
-        // defenders rather than along the ground.
-        const kickColor = pawn.plannedKickLoft ? 0x29b6f6 : 0xef6c00;
-        g.lineStyle(3 / zoom, kickColor, 1);
-        g.lineBetween(base.x, base.y, kick.x, kick.y);
-        g.fillStyle(kickColor, 1);
-        g.fillCircle(kick.x, kick.y, 7 / zoom);
-
-        // Aim-spread preview: a ring around the target sized by how precise
-        // this exact kick actually is (distance + the kicker's skill), using
-        // the same formula the resolution engine samples the real landing
-        // point from — a true preview of risk, not a separate guess. A
-        // small ring means a safe, reliable kick; a large one means it could
-        // land well off where you clicked.
-        const kickDist = Math.hypot(pawn.plannedKick.x - pawn.pos.x, pawn.plannedKick.y - pawn.pos.y);
-        const sigma = landingSpread(kickDist, pawn.player.skill);
-        const spreadPts: Vec2[] = [];
-        const RING_SEGMENTS = 28;
-        for (let i = 0; i <= RING_SEGMENTS; i++) {
-          const angle = (i / RING_SEGMENTS) * Math.PI * 2;
-          spreadPts.push(
-            p.toIso(
-              pawn.plannedKick.x + 0.5 + Math.cos(angle) * sigma,
-              pawn.plannedKick.y + 0.5 + Math.sin(angle) * sigma
-            )
-          );
-        }
-        g.lineStyle(1.5 / zoom, kickColor, 0.5);
-        strokePoly(g, spreadPts, true);
-
-        // Plain-language readout next to the ring: what kind of kick this is
-        // and how risky it actually is, instead of leaving the ring's size
-        // to speak for itself.
-        const intent = classifyKickTarget(pawn.plannedKick, pawn.side, pawn.id, this.state.pawns);
-        this.kickLabelText.setText(`${intentLabel(intent)}: ${riskLabel(sigma)}`);
-        this.kickLabelText.setPosition(kick.x, kick.y - 26 / zoom);
-        this.kickLabelText.setScale(1 / zoom);
-        this.kickLabelText.setVisible(true);
-        labelShown = true;
       }
     }
     if (!labelShown) this.kickLabelText.setVisible(false);
   }
+}
+
+/** Where a pawn's waypoint chain currently leaves it standing — the last MOVEMENT leg's destination, or `from` if the chain is empty or only kicks so far (a kick step doesn't move the pawn, see PlannedStep in types.ts). Mirrors Game.tsx's own copy used for click-gating. */
+function chainEndPosition(from: Vec2, steps: PlannedStep[]): Vec2 {
+  let cursor = from;
+  for (const step of steps) {
+    if (!step.kick) cursor = step.pos;
+  }
+  return cursor;
 }
 
 /** World-space circle (center cx,cy, radius r) sampled and projected through `p` — renders as an ellipse under tilt/rotation, same technique used for the center circle and aim-ring. */
