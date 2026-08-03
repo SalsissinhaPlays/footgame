@@ -29,9 +29,9 @@ export type Side = "home" | "away";
 /**
  * A standing defensive order for this turn, layered on top of (not instead
  * of) plannedSteps — a pawn can have an explicit chain of waypoints/kicks AND
- * a stance. Left open to future variants (offensive stances, a header-bonus
- * stance once crossing/heights exist) rather than closed off, but only
- * variants with a real mechanic to attach to belong here.
+ * a stance. Left open to future variants (offensive stances) rather than
+ * closed off, but only variants with a real mechanic to attach to belong
+ * here.
  *
  * gk_on_line/gk_aggressive are GK-only (enforced at the UI level, not the
  * type level — the same limitation man_mark already has: nothing stops an
@@ -39,12 +39,24 @@ export type Side = "home" | "away";
  * "aggressive" literal for the GK variant — contest.ts's stanceBonus already
  * keys off kind === "aggressive" for an outfield tackle bonus, and a name
  * collision would risk a GK tripping that branch.
+ *
+ * `expecting_header` gates header eligibility itself (see resolve.ts's
+ * checkHeader), not a contest bonus like the others — without it, a lofted
+ * ball just isn't headable by anyone nearby at all, it sails through the
+ * headable height band untouched until it descends low enough for a normal
+ * capture. This is deliberately more restrictive than every other stance,
+ * added specifically because an unconditional "anyone in HEADER_RADIUS
+ * auto-contests" rule made an ordinary lofted pass between two teammates
+ * involuntarily turn into a header duel the instant it crossed headable
+ * height — real football requires anticipating a cross to attack/defend it
+ * in the air, not an automatic reflex.
  */
 export type Stance =
   | { kind: "aggressive" }
   | { kind: "pressure" }
   | { kind: "cover_passing" }
   | { kind: "man_mark"; targetId: string }
+  | { kind: "expecting_header" }
   | { kind: "gk_on_line" }
   | { kind: "gk_aggressive" };
 

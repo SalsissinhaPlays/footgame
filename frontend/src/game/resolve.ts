@@ -745,7 +745,16 @@ function pickHeaderTarget(winner: Pawn, contactPoint: Vec2, pawns: Pawn[]): Head
  * already in flight.contested — same exclusions checkCapture already uses:
  * the kicker shouldn't head their own just-struck pass, and a pawn who
  * already lost one contest against this flight doesn't get a free second
- * roll just because the height band changed).
+ * roll just because the height band changed) — AND, deliberately, only a
+ * pawn whose stance is `"expecting_header"` this turn. Without that gate,
+ * *anyone* merely standing near a flight's path the instant it crossed into
+ * headable height would auto-contest it, which meant an ordinary lofted
+ * pass between two teammates could involuntarily turn into a header duel.
+ * Real football requires anticipating a cross to attack/defend it in the
+ * air — this stance is that anticipation. A pawn who never expected the
+ * ball to arrive that way just lets it sail past untouched until it
+ * descends low enough for a normal capture (see the tick loop's height
+ * banding).
  *
  * 2+ eligible pawns is a genuine resolveContestDetailed(..., "header")
  * contest — always produces a winner, no separate fail chance (a contested
@@ -759,7 +768,7 @@ function pickHeaderTarget(winner: Pawn, contactPoint: Vec2, pawns: Pawn[]): Head
  */
 function checkHeader(flight: BallFlight, from: Vec2, to: Vec2, pawns: Pawn[]): HeaderOutcome {
   const eligible = pawns
-    .filter((p) => p.id !== flight.kickerId && !flight.contested.has(p.id))
+    .filter((p) => p.id !== flight.kickerId && !flight.contested.has(p.id) && p.stance?.kind === "expecting_header")
     .map((p) => ({ p, d: distanceToSegment(p.pos, from, to) }))
     .filter(({ d }) => d <= HEADER_RADIUS)
     .sort((a, b) => a.d - b.d);

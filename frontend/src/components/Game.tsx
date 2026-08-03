@@ -94,6 +94,7 @@ const OUTFIELD_STANCE_OPTIONS = [
   { key: "pressure" as const, label: "Pressure" },
   { key: "cover_passing" as const, label: "Cover passing" },
   { key: "man_mark" as const, label: "Man-mark" },
+  { key: "expecting_header" as const, label: "Expecting header" },
 ];
 const GK_STANCE_OPTIONS = [
   NONE_OPTION,
@@ -444,6 +445,23 @@ export function Game({ mode, onExitToMenu }: Props) {
     );
     // Deliberately stays selected — the pawn keeps taking clicks to extend
     // its chain until the player selects someone/something else.
+  }
+
+  /**
+   * Right-click on the pitch always undoes the selected pawn's last planned
+   * step — a reliable, position-independent alternative to clicking back
+   * near the chain's current end (handleFieldClick's CANCEL_CLICK_EPS
+   * check), which still requires some precision. Also suppresses the
+   * browser's native right-click context menu on the canvas, which
+   * otherwise pops up and blocks the view — nothing in this game uses right
+   * click for anything else.
+   */
+  function handleViewportContextMenu(e: ReactMouseEvent) {
+    e.preventDefault();
+    if (resolving || !selectedPawn || selectedPawn.plannedSteps.length === 0) return;
+    setPawns((prev) =>
+      prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p))
+    );
   }
 
   /** Sets (or clears, with `null`) the selected pawn's stance for this turn. */
@@ -886,7 +904,8 @@ export function Game({ mode, onExitToMenu }: Props) {
       )}
       <p className="camera-hint">
         Mouse wheel: zoom. Middle (or side) button + drag horizontally: rotate the camera.
-        Drag vertically: adjust the tilt. WASD: pan around the pitch.
+        Drag vertically: adjust the tilt. WASD: pan around the pitch. Right-click: undo the
+        selected pawn's last waypoint.
       </p>
       <div
         className="field-viewport"
@@ -897,6 +916,7 @@ export function Game({ mode, onExitToMenu }: Props) {
         onMouseUp={stopRotating}
         onMouseLeave={stopRotating}
         onAuxClick={(e) => e.preventDefault()}
+        onContextMenu={handleViewportContextMenu}
       >
         {!sceneReady && <p className="hint">Loading the pitch...</p>}
         <PhaserGame onSceneReady={handleSceneReady} />
