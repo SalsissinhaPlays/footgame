@@ -75,9 +75,12 @@ export type Stance =
  * `kick.kind` is the player's own explicit declaration of what this kick is
  * for — not inferred from geometry (an earlier version guessed shot/pass/
  * clear from the target's position, purely for a UI label; that guess never
- * fed back into the resolution engine and has been retired). Only `"cross"`
- * changes the engine's actual behavior for now (see aim.ts's landingSpread)
- * — `"shot"`/`"pass"` resolve identically to each other, just labeled.
+ * fed back into the resolution engine and has been retired). All three kinds
+ * now resolve differently: `"cross"` widens the landing spread and keeps the
+ * full KICK_RANGE, `"pass"` keeps the normal spread but is capped at the
+ * shorter PASS_RANGE, and `"shot"` keeps KICK_RANGE and tightens the spread
+ * further when genuinely aimed on target (see aim.ts's landingSpread and
+ * resolve.ts's isShotOnTarget/startFlight).
  */
 export interface PlannedStep {
   pos: Vec2;

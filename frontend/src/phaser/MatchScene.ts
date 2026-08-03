@@ -10,7 +10,9 @@ import {
   GOAL_ROW_MIN,
   GRID_COLS,
   GRID_ROWS,
+  LOFT_APEX_HEIGHT_RATIO,
   LOFT_APEX_MAX,
+  LOFT_APEX_MIN,
   PAWN_COLLISION_RADIUS,
   PRESSURE_RADIUS,
   TACKLE_RADIUS,
@@ -23,6 +25,7 @@ import {
   VIEW_W,
   type Projector,
 } from "../game/iso";
+import { isShotOnTarget } from "../game/resolve";
 import type { Ball, Pawn, PlannedStep, Side, Vec2 } from "../game/types";
 import { EventBus } from "./EventBus";
 
@@ -35,6 +38,8 @@ export interface MatchSyncState {
   /** How far (world units) the selected pawn can move/kick this turn, or null if nothing's selected. */
   reachRadius: number | null;
   kickMode: boolean;
+  /** Which kick the action panel currently has selected — only meaningful while kickMode is true. Drives the live "mortar aim" cross preview (see updateOverlay). */
+  kickKind: "shot" | "pass" | "cross";
   controllingSide: Side;
   /** focusX/focusY are the world (grid) point the camera looks at — re-projected through the current rotation/tilt every time either changes, which is what keeps that point centered through a rotate/tilt instead of the view swinging back toward the pitch's fixed center. */
   camera: { zoom: number; rotation: number; tilt: number; focusX: number; focusY: number };
@@ -62,6 +67,22 @@ const TWEEN_MS = 350;
 // through the isometric projector's tilt math.
 const BALL_GROUND_LIFT = 10;
 const BALL_HEIGHT_PX_PER_UNIT = 14;
+
+/**
+ * How tall (in the same view-space pixels updateBall lifts the ball sprite
+ * by) a lofted kick's on-screen arc preview should bulge for a kick of this
+ * distance — mirrors resolve.ts's startFlight apexHeight formula exactly
+ * (LOFT_APEX_MIN/MAX/HEIGHT_RATIO), converted through the same
+ * BALL_HEIGHT_PX_PER_UNIT scale the real flight's height uses, so the
+ * preview arc actually resembles the path the ball will take instead of an
+ * arbitrary decorative bulge. Deliberately NOT divided by camera zoom, same
+ * as updateBall's own liftPx — this represents a real world-space height,
+ * not a fixed on-screen line width/label size.
+ */
+function apexHeightPx(dist: number): number {
+  const apexMeters = Math.min(LOFT_APEX_MAX, Math.max(LOFT_APEX_MIN, dist * LOFT_APEX_HEIGHT_RATIO));
+  return apexMeters * BALL_HEIGHT_PX_PER_UNIT;
+}
 
 function spriteKeyFor(pawn: Pawn): string {
   if (pawn.player.position === "GK") return "player_gk";
@@ -100,6 +121,13 @@ export class MatchScene extends Phaser.Scene {
 
   private state: MatchSyncState | null = null;
   private callbacks: MatchCallbacks | null = null;
+  // Live cursor world-position while hovering the pitch in kick mode — see
+  // the fieldZone "pointermove" listener and updateOverlay's cross-preview
+  // block. Not part of MatchSyncState: it changes far more often than a
+  // React render (every mouse move, not every state change), and nothing
+  // outside rendering needs it, so it stays local to the scene rather than
+  // round-tripping through React.
+  private hoverPoint: Vec2 | null = null;
   private lastRotation: number | null = null;
   private lastTilt: number | null = null;
   // Scale needed to fit the fixed-size isometric world into the actual
@@ -166,6 +194,14 @@ export class MatchScene extends Phaser.Scene {
     this.fieldZone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       const point = this.projector.fromIso(pointer.worldX, pointer.worldY);
       this.callbacks?.onFieldClick(point);
+    });
+    // Drives the live "mortar aim" cross preview (updateOverlay) — redrawn
+    // directly here rather than waiting for React's next render, since
+    // mouse movement over the canvas doesn't itself trigger a React state
+    // change in this architecture.
+    this.fieldZone.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      this.hoverPoint = this.projector.fromIso(pointer.worldX, pointer.worldY);
+      this.updateOverlay();
     });
 
     this.handleResize(this.scale.gameSize);
@@ -424,12 +460,13 @@ export class MatchScene extends Phaser.Scene {
       return;
     }
 
-    // Base "clear" tint over the whole reach circle; shot/pass zones layer on top.
-    g.fillStyle(0xff8c00, 0.22);
-    fillPoly(g, reachPts);
-    g.lineStyle(1.5, 0xffa028, 0.9);
-    strokePoly(g, reachPts, true);
-
+    // Deliberately no blanket tint over the whole reach circle here anymore
+    // (an earlier version filled it orange edge-to-edge) — with the live
+    // "mortar aim" ring (updateOverlay) already showing real accuracy right
+    // at the cursor, a second, much bigger orange dome covering the entire
+    // reachable area was pure visual noise on top of it, per an explicit
+    // user call. The goal tint and teammate halo below stay: unlike the
+    // blanket fill, they mark specific, useful sub-regions.
     const goalLineX = selectedPawn.side === "home" ? GRID_COLS : 0;
     const goalYTop = GOAL_ROW_MIN;
     const goalYBottom = GOAL_ROW_MAX + 1;
@@ -719,8 +756,17 @@ export class MatchScene extends Phaser.Scene {
             // planning preview already hints that this ball will sail over
             // defenders rather than along the ground.
             const kickColor = step.kick.loft ? 0x29b6f6 : 0xef6c00;
+            const kickDist = Math.hypot(step.pos.x - worldCursor.x, step.pos.y - worldCursor.y);
             g.lineStyle(3 / zoom, kickColor, 1);
-            g.lineBetween(from.x, from.y, to.x, to.y);
+            if (step.kick.loft) {
+              // A real arc (see arcPoints/apexHeightPx) rather than a
+              // straight line — a lofted kick genuinely travels through the
+              // air, so the plan preview should look like it, not just the
+              // live pre-commit cross preview below.
+              strokePoly(g, arcPoints(from, to, apexHeightPx(kickDist)), false);
+            } else {
+              g.lineBetween(from.x, from.y, to.x, to.y);
+            }
             g.fillStyle(kickColor, 1);
             g.fillCircle(to.x, to.y, 7 / zoom);
 
@@ -730,8 +776,9 @@ export class MatchScene extends Phaser.Scene {
             // the real landing point from — a true preview of risk, not a
             // separate guess. A small ring means a safe, reliable kick; a
             // large one means it could land well off where you clicked.
-            const kickDist = Math.hypot(step.pos.x - worldCursor.x, step.pos.y - worldCursor.y);
-            const sigma = landingSpread(kickDist, pawn.player.skill, step.kick.kind === "cross");
+            const onTarget =
+              step.kick.kind === "shot" && isShotOnTarget(worldCursor, step.pos, pawn.side);
+            const sigma = landingSpread(kickDist, pawn.player.skill, step.kick.kind, onTarget);
             const spreadPts: Vec2[] = [];
             const RING_SEGMENTS = 28;
             for (let a = 0; a <= RING_SEGMENTS; a++) {
@@ -770,6 +817,66 @@ export class MatchScene extends Phaser.Scene {
         });
       }
     }
+
+    // Live "mortar aim" preview for a cross that hasn't been placed yet —
+    // tracks the mouse continuously (fieldZone's pointermove listener above)
+    // instead of only reflecting the final spread once a kick step is
+    // actually committed, so the ring visibly grows/shrinks as the cursor
+    // moves before the player commits to a target. Scoped to cross
+    // specifically, per an explicit user call — shot/pass keep the simpler
+    // committed-only preview above.
+    const { selectedId, kickMode, kickKind, reachRadius } = this.state;
+    if (kickMode && kickKind === "cross" && selectedId && this.hoverPoint && reachRadius !== null) {
+      const pawn = this.state.pawns.find((pw) => pw.id === selectedId);
+      if (pawn) {
+        const origin = chainEndPosition(pawn.pos, pawn.plannedSteps);
+        const dx = this.hoverPoint.x - origin.x;
+        const dy = this.hoverPoint.y - origin.y;
+        const rawDist = Math.hypot(dx, dy);
+        const clampFraction = rawDist > reachRadius ? reachRadius / Math.max(rawDist, 1e-6) : 1;
+        const aimWorld: Vec2 = { x: origin.x + dx * clampFraction, y: origin.y + dy * clampFraction };
+        const dist = Math.hypot(aimWorld.x - origin.x, aimWorld.y - origin.y);
+
+        const originScreen = p.toIso(origin.x + 0.5, origin.y + 0.5);
+        const aimScreen = p.toIso(aimWorld.x + 0.5, aimWorld.y + 0.5);
+        // Always the "loft" color — a cross is always airborne (see
+        // resolve.ts's startFlight), so there's no grounded variant to
+        // distinguish from anymore.
+        const kickColor = 0x29b6f6;
+
+        // The real arc a lofted kick this distance will actually take (see
+        // apexHeightPx/arcPoints), not an arbitrary decorative bulge — a
+        // true preview of the flight path, same spirit as the accuracy ring
+        // below sampling the real landingSpread formula.
+        g.lineStyle(3 / zoom, kickColor, 1);
+        strokePoly(g, arcPoints(originScreen, aimScreen, apexHeightPx(dist)), false);
+        g.fillStyle(kickColor, 1);
+        g.fillCircle(aimScreen.x, aimScreen.y, 7 / zoom);
+
+        // Same accuracy formula the resolution engine will actually sample
+        // from (see aim.ts's landingSpread) — recomputed every pointermove,
+        // which is what makes the ring expand/contract live as the cursor
+        // moves closer or further rather than only settling once clicked.
+        const sigma = landingSpread(dist, pawn.player.skill, "cross");
+        const spreadPts: Vec2[] = [];
+        const RING_SEGMENTS = 28;
+        for (let a = 0; a <= RING_SEGMENTS; a++) {
+          const angle = (a / RING_SEGMENTS) * Math.PI * 2;
+          spreadPts.push(
+            p.toIso(aimWorld.x + 0.5 + Math.cos(angle) * sigma, aimWorld.y + 0.5 + Math.sin(angle) * sigma)
+          );
+        }
+        g.lineStyle(1.5 / zoom, kickColor, 0.5);
+        strokePoly(g, spreadPts, true);
+
+        this.kickLabelText.setText(`${KICK_KIND_LABEL.cross}: ${riskLabel(sigma)}`);
+        this.kickLabelText.setPosition(aimScreen.x, aimScreen.y - 26 / zoom);
+        this.kickLabelText.setScale(1 / zoom);
+        this.kickLabelText.setVisible(true);
+        labelShown = true;
+      }
+    }
+
     if (!labelShown) this.kickLabelText.setVisible(false);
   }
 }
@@ -790,6 +897,23 @@ function chainEndPosition(from: Vec2, steps: PlannedStep[]): Vec2 {
 }
 
 /** World-space circle (center cx,cy, radius r) sampled and projected through `p` — renders as an ellipse under tilt/rotation, same technique used for the center circle and aim-ring. */
+/**
+ * Screen-space points tracing a lofted kick's real arc between two already-
+ * projected screen points — a parabola matching resolve.ts's
+ * heightAlongFlight shape exactly (0 at both ends, peaking at the midpoint),
+ * bulging by `bulgePx` (see apexHeightPx) at t=0.5. Shared by the committed-
+ * kick overlay and the live cross preview so the two can't drift apart.
+ */
+function arcPoints(from: Vec2, to: Vec2, bulgePx: number, segments = 24): Vec2[] {
+  const pts: Vec2[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const bulge = bulgePx * 4 * t * (1 - t);
+    pts.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t - bulge });
+  }
+  return pts;
+}
+
 function isoCircle(p: Projector, cx: number, cy: number, r: number, segments = 32): Vec2[] {
   const pts: Vec2[] = [];
   for (let i = 0; i <= segments; i++) {

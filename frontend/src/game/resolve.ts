@@ -33,6 +33,7 @@ import {
   MISHIT_SIGMA_MULTIPLIER,
   MOVE_RANGE,
   OOB_CELLS,
+  PASS_RANGE,
   PAWN_COLLISION_RADIUS,
   PAWN_MOVE_BUDGET,
   PAWN_SPEED_PER_TICK,
@@ -133,6 +134,29 @@ export interface DeadBallResult {
 
 function isInGoalRows(y: number): boolean {
   return y >= GOAL_ROW_MIN && y <= GOAL_ROW_MAX;
+}
+
+/**
+ * Whether a shot aimed from `carrierPos` toward `aim` would cross the
+ * opponent's goal mouth if it kept traveling in a straight line all the way
+ * to the goal line — the real-football sense of "on target" (would this go
+ * in if left unobstructed), independent of how far short of the line the
+ * clicked aim point actually was. Ray-based rather than "is `aim` itself
+ * inside the goal mouth" so a shot aimed at the right side of the goal from
+ * open play still counts even when KICK_RANGE left the aim point short of
+ * the line. Only meaningful for a "shot" kick — see aim.ts's landingSpread
+ * for the accuracy bonus this gates. Exported so MatchScene's kick-preview
+ * overlay can compute the exact same bonus the engine will actually apply,
+ * rather than drifting out of sync with a second guess at the formula.
+ */
+export function isShotOnTarget(carrierPos: Vec2, aim: Vec2, side: Side): boolean {
+  const goalLineX = side === "home" ? GRID_COLS : 0;
+  const dx = aim.x - carrierPos.x;
+  const towardGoal = side === "home" ? dx > 1e-6 : dx < -1e-6;
+  if (!towardGoal) return false;
+  const t = (goalLineX - carrierPos.x) / dx;
+  const y = carrierPos.y + (aim.y - carrierPos.y) * t;
+  return isInGoalRows(y);
 }
 
 /**
@@ -502,22 +526,34 @@ interface FlightStart {
   mishit: boolean;
 }
 
-function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean, isCross: boolean): FlightStart {
+function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean, kind: "shot" | "pass" | "cross"): FlightStart {
+  // A pass's range cap is genuinely shorter than a shot/cross's — see
+  // PASS_RANGE's own comment for why that's the axis it trades instead of
+  // accuracy.
+  const range = kind === "pass" ? PASS_RANGE : KICK_RANGE;
   const dist = distance(carrier.pos, rawTarget);
-  const clampFraction = dist > KICK_RANGE ? KICK_RANGE / dist : 1;
+  const clampFraction = dist > range ? range / dist : 1;
   const aim: Vec2 = {
     x: carrier.pos.x + (rawTarget.x - carrier.pos.x) * clampFraction,
     y: carrier.pos.y + (rawTarget.y - carrier.pos.y) * clampFraction,
   };
   // Where the kick is actually going isn't the aim point itself — it's
   // sampled from a spread around it, tighter for a shorter/more skilled
-  // kick (wider still for a cross — see aim.ts's landingSpread). The flight
-  // then travels toward that real landing point exactly like any other
-  // kick: same straight-line path, same tick-by-tick interception checks.
-  // Only the target the flight aims for changes.
-  const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill, isCross);
+  // kick (wider still for a cross, tighter still for a shot genuinely lined
+  // up on goal — see aim.ts's landingSpread). The flight then travels
+  // toward that real landing point exactly like any other kick: same
+  // straight-line path, same tick-by-tick interception checks. Only the
+  // target the flight aims for changes.
+  const onTarget = kind === "shot" && isShotOnTarget(carrier.pos, aim, carrier.side);
+  const landing = sampleLanding(aim, distance(carrier.pos, aim), carrier.player.skill, kind, onTarget);
   const totalDist = Math.max(distance(carrier.pos, landing.point), 1e-6);
-  const apexHeight = loft
+  // A cross is airborne by definition — real crossing means flighting the
+  // ball into the box, not rolling it along the ground — so it always gets
+  // real height regardless of what the `loft` flag says, overriding it here
+  // rather than trusting the UI to have already forced it. Ground/Loft stays
+  // a genuine choice for shot/pass (a low driven pass vs. a chipped one).
+  const effectiveLoft = kind === "cross" || loft;
+  const apexHeight = effectiveLoft
     ? Math.min(LOFT_APEX_MAX, Math.max(LOFT_APEX_MIN, totalDist * LOFT_APEX_HEIGHT_RATIO))
     : 0;
   return {
@@ -887,10 +923,21 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     return slice;
   }
   // Defensively clamp to each pawn's own charge count AND total move budget
-  // — see clampStepsToBudget's own doc comment.
+  // — see clampStepsToBudget's own doc comment. A sprinting pawn's budget is
+  // the boosted one (matching Game.tsx's own moveBudget the UI planned
+  // against) — clamping every pawn back down to the plain PAWN_MOVE_BUDGET
+  // regardless of plannedSprint used to silently discard a sprinting pawn's
+  // entire first leg the moment it was planned beyond the un-boosted range,
+  // leaving it with an empty plan (no movement at all) instead of a merely
+  // shorter one.
   let current: Pawn[] = pawns.map((p) => ({
     ...p,
-    plannedSteps: clampStepsToBudget(p.pos, p.plannedSteps, chargesFor(p.player), PAWN_MOVE_BUDGET),
+    plannedSteps: clampStepsToBudget(
+      p.pos,
+      p.plannedSteps,
+      chargesFor(p.player),
+      p.plannedSprint ? PAWN_MOVE_BUDGET * SPRINT_SPEED_MULTIPLIER : PAWN_MOVE_BUDGET
+    ),
   }));
   const snapshots: ResolveSnapshot[] = [];
   // Captured before the tick loop wipes plannedSteps each tick (see the
@@ -987,7 +1034,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         const step = steps[cursor];
         if (p.id === currentCarrierId) {
           const kind = step.kick!.kind;
-          const started = startFlight(p, step.pos, step.kick!.loft, kind === "cross");
+          const started = startFlight(p, step.pos, step.kick!.loft, kind);
           flight = started.flight;
           const verb = kind === "shot" ? "shoots" : kind === "cross" ? "sends in a cross" : "plays a pass";
           events.push(started.mishit ? `${p.player.name} ${verb}, but it's off target` : `${p.player.name} ${verb}`);

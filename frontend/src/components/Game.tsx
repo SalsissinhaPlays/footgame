@@ -8,6 +8,7 @@ import {
   KICK_CHARGE_COST,
   KICK_RANGE,
   OOB_CELLS,
+  PASS_RANGE,
   PAWN_MOVE_BUDGET,
   SPRINT_COOLDOWN_TURNS,
   SPRINT_SPEED_MULTIPLIER,
@@ -132,6 +133,47 @@ function kickoffFormation(pawns: Pawn[]): Pawn[] {
   return [...buildFormation(homePlayers, "home"), ...buildFormation(awayPlayers, "away")];
 }
 
+/**
+ * Everything that constitutes "the match" as a single serializable object —
+ * what a save/load or a future network sync would need to reconstruct play
+ * exactly where it stood. Deliberately does NOT include per-viewer UI/input
+ * state (camera, fullscreen, which action-panel toggle is open, which pawn
+ * is currently selected) — that's real state too, but it's local-viewer
+ * state, not shared match truth, so it stays as its own useState hooks below
+ * rather than being folded in here.
+ */
+interface MatchState {
+  pawns: Pawn[];
+  ball: Ball;
+  ballHeight: number;
+  turn: number;
+  homeScore: number;
+  awayScore: number;
+  controllingSide: "home" | "away";
+  readySides: Set<"home" | "away">;
+  pendingRestart: DeadBallResult | null;
+  restartSetup: { deadBall: DeadBallResult; turnsRemaining: number } | null;
+  events: string[];
+  resolving: boolean;
+}
+
+function initialMatchState(): MatchState {
+  return {
+    pawns: [],
+    ball: { pos: BALL_START },
+    ballHeight: 0,
+    turn: 1,
+    homeScore: 0,
+    awayScore: 0,
+    controllingSide: "home",
+    readySides: new Set(),
+    pendingRestart: null,
+    restartSetup: null,
+    events: [],
+    resolving: false,
+  };
+}
+
 interface Props {
   mode: "hotseat" | "ai" | "solo";
   onExitToMenu: () => void;
@@ -188,39 +230,26 @@ export function Game({ mode, onExitToMenu }: Props) {
   });
   const pressedKeys = useRef<Set<string>>(new Set());
   const [teams, setTeams] = useState<TeamDTO[]>([]);
-  const [pawns, setPawns] = useState<Pawn[]>([]);
-  const [ball, setBall] = useState<Ball>({ pos: BALL_START });
-  const [ballHeight, setBallHeight] = useState(0);
+  // The match's shared truth — see MatchState's own doc comment above for
+  // what belongs here vs. in the standalone UI hooks below.
+  const [match, setMatch] = useState<MatchState>(initialMatchState());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
   const [kickLoft, setKickLoft] = useState(false);
   // The player's own explicit declaration of what a queued kick is for —
   // shot/pass resolve identically to each other, only cross changes the
-  // engine's actual accuracy (see aim.ts's landingSpread). Independent of
-  // kickLoft: either axis can combine with the other (a low driven cross,
-  // a chipped shot, ...).
+  // engine's actual accuracy (see aim.ts's landingSpread). Mostly
+  // independent of kickLoft (a chipped shot, a lofted pass, ...) except for
+  // cross, which always forces loft — crossing means flighting the ball in,
+  // not rolling it (see resolve.ts's startFlight and the Ground/Loft row
+  // below, hidden when kickKind is "cross").
   const [kickKind, setKickKind] = useState<"shot" | "pass" | "cross">("pass");
   const [stanceMenuOpen, setStanceMenuOpen] = useState(false);
   // True while the player has picked "Man-mark" for the selected pawn and
   // is now expected to click an opponent pawn instead of a cell/destination.
   const [pickingMarkTarget, setPickingMarkTarget] = useState(false);
-  const [controllingSide, setControllingSide] = useState<"home" | "away">("home");
-  const [readySides, setReadySides] = useState<Set<"home" | "away">>(new Set());
   const [handoff, setHandoff] = useState(false);
-  // Awaiting the restarting side's quick-vs-extended-setup choice; set right
-  // after a dead-ball restart is placed, cleared once they choose.
-  const [pendingRestart, setPendingRestart] = useState<DeadBallResult | null>(null);
-  // Active only once "extended setup" was chosen — counts down one full turn
-  // at a time via resolveSetupTurn instead of the normal live resolveTurn.
-  const [restartSetup, setRestartSetup] = useState<{ deadBall: DeadBallResult; turnsRemaining: number } | null>(
-    null
-  );
-  const [turn, setTurn] = useState(1);
-  const [homeScore, setHomeScore] = useState(0);
-  const [awayScore, setAwayScore] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [resolving, setResolving] = useState(false);
-  const [events, setEvents] = useState<string[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -229,7 +258,10 @@ export function Game({ mode, onExitToMenu }: Props) {
       const homePlayers = await fetchPlayers(home.id);
       const awayPlayers = await fetchPlayers(away.id);
       setTeams(fetchedTeams);
-      setPawns([...buildFormation(homePlayers, "home"), ...buildFormation(awayPlayers, "away")]);
+      setMatch((prev) => ({
+        ...prev,
+        pawns: [...buildFormation(homePlayers, "home"), ...buildFormation(awayPlayers, "away")],
+      }));
       setLoading(false);
     }
     load();
@@ -346,7 +378,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setCamera({ zoom: 1, rotation: 0, tilt: TILT_DEFAULT, focusX: GRID_COLS / 2, focusY: GRID_ROWS / 2 });
   }
 
-  const selectedPawn = pawns.find((p) => p.id === selectedId) ?? null;
+  const selectedPawn = match.pawns.find((p) => p.id === selectedId) ?? null;
 
   // A pawn's WHOLE-turn move budget — unchanged in total amount by chaining
   // waypoints, same as it always was for a single destination. Charges (see
@@ -369,10 +401,15 @@ export function Game({ mode, onExitToMenu }: Props) {
   // ALREADY holding the ball (a chain can walk to it first; see resolve.ts's
   // tick loop for how a kick step silently fizzles if that bet doesn't pay
   // off), so Kick mode is only gated by having a spare charge, same as Move.
+  // A pass's reach is genuinely shorter than a shot/cross's — see
+  // constants.ts's PASS_RANGE for why — so the reach circle (and the click
+  // gate below) has to know which kind is currently selected, not just
+  // whether a charge is available.
+  const kickRangeForKind = kickKind === "pass" ? PASS_RANGE : KICK_RANGE;
   const reachRadius = selectedPawn
     ? kickMode
       ? chargesRemaining >= KICK_CHARGE_COST
-        ? KICK_RANGE
+        ? kickRangeForKind
         : null
       : chargesRemaining > 0 && distanceRemaining > 0
         ? distanceRemaining
@@ -392,18 +429,29 @@ export function Game({ mode, onExitToMenu }: Props) {
   const CANCEL_CLICK_EPS = 1.2;
 
   function handlePawnClick(pawn: Pawn) {
-    if (resolving) return;
-    if (pickingMarkTarget && selectedPawn && pawn.side !== controllingSide) {
-      setPawns((prev) =>
-        prev.map((p) =>
+    if (match.resolving) return;
+    if (pickingMarkTarget && selectedPawn && pawn.side !== match.controllingSide) {
+      setMatch((prev) => ({
+        ...prev,
+        pawns: prev.pawns.map((p) =>
           p.id === selectedPawn.id ? { ...p, stance: { kind: "man_mark", targetId: pawn.id } } : p
-        )
-      );
+        ),
+      }));
       setPickingMarkTarget(false);
       setSelectedId(null);
       return;
     }
-    if (pawn.side !== controllingSide) return;
+    // A kick's aim target is very often exactly where a player is standing
+    // — a cross aimed at a teammate's head, a shot past a keeper — but
+    // Phaser's default topOnly input means a click that lands on a pawn's
+    // own hit area never reaches the field zone underneath it. Without this,
+    // aiming at a pawn while in kick mode silently hijacked the click into
+    // reselecting (or deselecting) that pawn instead of placing the kick.
+    if (kickMode && selectedPawn) {
+      handleFieldClick(pawn.pos);
+      return;
+    }
+    if (pawn.side !== match.controllingSide) return;
     setKickMode(false);
     setKickLoft(false);
     setKickKind("pass");
@@ -413,19 +461,25 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function handleFieldClick(point: Vec2) {
-    if (resolving) return;
+    if (match.resolving) return;
     if (!selectedPawn || !chainEnd) return;
     if (!inBounds(point)) return;
 
     if (kickMode) {
       if (reachRadius === null || euclideanDistance(chainEnd, point) > reachRadius) return;
-      setPawns((prev) =>
-        prev.map((p) =>
+      // A cross is airborne by definition — always lofted regardless of the
+      // Ground/Loft toggle (which stays a real choice for shot/pass). Also
+      // enforced defensively in resolve.ts's startFlight, so this isn't the
+      // only thing keeping the two in sync.
+      const loft = kickKind === "cross" ? true : kickLoft;
+      setMatch((prev) => ({
+        ...prev,
+        pawns: prev.pawns.map((p) =>
           p.id === selectedPawn.id
-            ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point, kick: { loft: kickLoft, kind: kickKind } }] }
+            ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point, kick: { loft, kind: kickKind } }] }
             : p
-        )
-      );
+        ),
+      }));
       // Back to Move for whatever comes next — a pawn can't queue a second
       // kick right behind the first (they no longer have the ball once this
       // one fires), but they can still plan movement afterward, so the pawn
@@ -444,9 +498,10 @@ export function Game({ mode, onExitToMenu }: Props) {
 
     if (euclideanDistance(chainEnd, point) < CANCEL_CLICK_EPS) {
       if (steps.length > 0) {
-        setPawns((prev) =>
-          prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p))
-        );
+        setMatch((prev) => ({
+          ...prev,
+          pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p)),
+        }));
       }
       return;
     }
@@ -454,9 +509,10 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (chargesRemaining <= 0) return;
     if (euclideanDistance(chainEnd, point) > distanceRemaining) return;
 
-    setPawns((prev) =>
-      prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point }] } : p))
-    );
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point }] } : p)),
+    }));
     // Deliberately stays selected — the pawn keeps taking clicks to extend
     // its chain until the player selects someone/something else.
   }
@@ -472,16 +528,20 @@ export function Game({ mode, onExitToMenu }: Props) {
    */
   function handleViewportContextMenu(e: ReactMouseEvent) {
     e.preventDefault();
-    if (resolving || !selectedPawn || selectedPawn.plannedSteps.length === 0) return;
-    setPawns((prev) =>
-      prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p))
-    );
+    if (match.resolving || !selectedPawn || selectedPawn.plannedSteps.length === 0) return;
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p)),
+    }));
   }
 
   /** Sets (or clears, with `null`) the selected pawn's stance for this turn. */
   function handleSetStance(stance: Stance | null) {
     if (!selectedPawn) return;
-    setPawns((prev) => prev.map((p) => (p.id === selectedPawn.id ? { ...p, stance } : p)));
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, stance } : p)),
+    }));
     setPickingMarkTarget(false);
   }
 
@@ -499,9 +559,10 @@ export function Game({ mode, onExitToMenu }: Props) {
   function handleToggleSprint() {
     if (!selectedPawn) return;
     if (!selectedPawn.plannedSprint && selectedPawn.sprintCooldown > 0) return;
-    setPawns((prev) =>
-      prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSprint: !p.plannedSprint } : p))
-    );
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSprint: !p.plannedSprint } : p)),
+    }));
   }
 
   // Keep the Phaser-facing callbacks stable (set once when the scene mounts)
@@ -509,7 +570,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   useEffect(() => {
     handlersRef.current = {
       onPawnClick: (pawnId: string) => {
-        const pawn = pawns.find((p) => p.id === pawnId);
+        const pawn = match.pawns.find((p) => p.id === pawnId);
         if (pawn) handlePawnClick(pawn);
       },
       onFieldClick: handleFieldClick,
@@ -527,74 +588,81 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   useEffect(() => {
     sceneRef.current?.syncState({
-      pawns,
-      ball,
-      ballHeight,
+      pawns: match.pawns,
+      ball: match.ball,
+      ballHeight: match.ballHeight,
       selectedId,
       reachRadius,
       kickMode,
-      controllingSide,
+      kickKind,
+      controllingSide: match.controllingSide,
       camera,
     });
   });
 
   async function resolveWithPawns(inputPawns: Pawn[]) {
-    setResolving(true);
-    setEvents([]);
+    setMatch((prev) => ({ ...prev, resolving: true, events: [] }));
 
     // An active "extended setup" period: this turn is pure repositioning,
     // not a live resolveTurn — no kicks/captures/tackles/saves are possible
     // since the ball is dead at a fixed spot for the whole turn. See
     // restartSetup.ts's own doc comment for why this is a separate function
     // rather than a mode of resolveTurn.
+    const restartSetup = match.restartSetup;
     if (restartSetup) {
       const snapshots = resolveSetupTurn(inputPawns, restartSetup.deadBall.spot);
       let prevPawns = inputPawns;
       let prevBallPos = restartSetup.deadBall.spot;
       for (const snapshot of snapshots) {
         const stillMoving = !nothingMoved(snapshot.pawns, snapshot.ball, prevPawns, prevBallPos);
-        setPawns(snapshot.pawns);
-        setBall({ pos: snapshot.ball });
-        setBallHeight(snapshot.ballHeight);
+        setMatch((prev) => ({
+          ...prev,
+          pawns: snapshot.pawns,
+          ball: { pos: snapshot.ball },
+          ballHeight: snapshot.ballHeight,
+        }));
         await sleep(stillMoving ? 350 : 80);
         prevPawns = snapshot.pawns;
         prevBallPos = snapshot.ball;
       }
 
-      setPawns((prev) =>
-        prev.map((p) => ({
+      const turnsRemaining = restartSetup.turnsRemaining - 1;
+      setMatch((prev) => ({
+        ...prev,
+        pawns: prev.pawns.map((p) => ({
           ...p,
           stance: p.stance ? null : p.stance,
           plannedSprint: false,
           sprintCooldown: p.plannedSprint ? SPRINT_COOLDOWN_TURNS : Math.max(0, p.sprintCooldown - 1),
-        }))
-      );
-
-      const turnsRemaining = restartSetup.turnsRemaining - 1;
-      setRestartSetup(turnsRemaining > 0 ? { ...restartSetup, turnsRemaining } : null);
-      setTurn((t) => t + 1);
-      setReadySides(new Set());
-      setControllingSide("home");
-      setResolving(false);
+        })),
+        restartSetup: turnsRemaining > 0 ? { ...restartSetup, turnsRemaining } : null,
+        turn: prev.turn + 1,
+        readySides: new Set(),
+        controllingSide: "home",
+        resolving: false,
+      }));
       return;
     }
 
-    const { snapshots, goal, deadBall } = resolveTurn(inputPawns, ball);
+    const { snapshots, goal, deadBall } = resolveTurn(inputPawns, match.ball);
     let prevPawns = inputPawns;
-    let prevBallPos = ball.pos;
+    let prevBallPos = match.ball.pos;
     // Revealed tick-by-tick in step with the animation, rather than dumped
     // all at once after everything's already finished moving — otherwise
     // there's no way to tell which skill check/interception happened when.
     let revealedEvents: string[] = [];
     for (const snapshot of snapshots) {
       const stillMoving = !nothingMoved(snapshot.pawns, snapshot.ball, prevPawns, prevBallPos);
-      setPawns(snapshot.pawns);
-      setBall({ pos: snapshot.ball });
-      setBallHeight(snapshot.ballHeight);
       if (snapshot.events.length > 0) {
         revealedEvents = [...revealedEvents, ...snapshot.events];
-        setEvents(revealedEvents);
       }
+      setMatch((prev) => ({
+        ...prev,
+        pawns: snapshot.pawns,
+        ball: { pos: snapshot.ball },
+        ballHeight: snapshot.ballHeight,
+        events: revealedEvents,
+      }));
       await sleep(stillMoving ? 350 : 80);
       prevPawns = snapshot.pawns;
       prevBallPos = snapshot.ball;
@@ -608,35 +676,45 @@ export function Game({ mode, onExitToMenu }: Props) {
     // turn-over-turn, computed here (not resolve.ts, which has no notion of
     // "next turn") in the same pass — a pawn that just sprinted resets to a
     // full cooldown, everyone else's existing cooldown ticks down by one.
-    setPawns((prev) =>
-      prev.map((p) => ({
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => ({
         ...p,
         stance: p.stance ? null : p.stance,
         plannedSprint: false,
         sprintCooldown: p.plannedSprint ? SPRINT_COOLDOWN_TURNS : Math.max(0, p.sprintCooldown - 1),
-      }))
-    );
+      })),
+    }));
 
     if (goal) {
-      if (goal === "home") setHomeScore((s) => s + 1);
-      else setAwayScore((s) => s + 1);
+      setMatch((prev) => ({
+        ...prev,
+        homeScore: goal === "home" ? prev.homeScore + 1 : prev.homeScore,
+        awayScore: goal === "away" ? prev.awayScore + 1 : prev.awayScore,
+      }));
       await sleep(600);
-      setPawns((prev) => kickoffFormation(prev));
-      setBall({ pos: BALL_START });
-      setBallHeight(0);
+      setMatch((prev) => ({
+        ...prev,
+        pawns: kickoffFormation(prev.pawns),
+        ball: { pos: BALL_START },
+        ballHeight: 0,
+      }));
     } else if (deadBall) {
       // Only the ball and the single pawn taking the restart move — everyone
       // else stays exactly where the run of play left them, unlike a goal's
       // full formation reset.
-      setBall({ pos: deadBall.spot });
-      setBallHeight(0);
-      setPawns((prev) => {
-        const eligible = prev.filter((p) => p.side === deadBall.side);
-        if (eligible.length === 0) return prev;
-        const nearest = eligible.reduce((best, p) =>
-          euclideanDistance(p.pos, deadBall.spot) < euclideanDistance(best.pos, deadBall.spot) ? p : best
-        );
-        return prev.map((p) => (p.id === nearest.id ? { ...p, pos: { ...deadBall.spot } } : p));
+      setMatch((prev) => {
+        const eligible = prev.pawns.filter((p) => p.side === deadBall.side);
+        const pawns =
+          eligible.length === 0
+            ? prev.pawns
+            : (() => {
+                const nearest = eligible.reduce((best, p) =>
+                  euclideanDistance(p.pos, deadBall.spot) < euclideanDistance(best.pos, deadBall.spot) ? p : best
+                );
+                return prev.pawns.map((p) => (p.id === nearest.id ? { ...p, pos: { ...deadBall.spot } } : p));
+              })();
+        return { ...prev, ball: { pos: deadBall.spot }, ballHeight: 0, pawns };
       });
 
       // Only the restarting side gets a say in quick-vs-extended — no human
@@ -649,27 +727,34 @@ export function Game({ mode, onExitToMenu }: Props) {
         (mode === "hotseat" ||
           (mode === "ai" && deadBall.side === "home") ||
           (mode === "solo" && deadBall.side === "home"));
-      if (humanControlsRestart) setPendingRestart(deadBall);
+      if (humanControlsRestart) setMatch((prev) => ({ ...prev, pendingRestart: deadBall }));
     }
 
-    setTurn((t) => t + 1);
-    setReadySides(new Set());
-    setControllingSide("home");
-    setResolving(false);
+    setMatch((prev) => ({
+      ...prev,
+      turn: prev.turn + 1,
+      readySides: new Set(),
+      controllingSide: "home",
+      resolving: false,
+    }));
   }
 
   function handleQuickRestart() {
-    setPendingRestart(null);
+    setMatch((prev) => ({ ...prev, pendingRestart: null }));
   }
 
   function handleExtendedSetup() {
-    if (!pendingRestart) return;
-    setRestartSetup({ deadBall: pendingRestart, turnsRemaining: SETUP_TURNS_BY_TYPE[pendingRestart.type] });
-    setPendingRestart(null);
+    if (!match.pendingRestart) return;
+    const pendingRestart = match.pendingRestart;
+    setMatch((prev) => ({
+      ...prev,
+      restartSetup: { deadBall: pendingRestart, turnsRemaining: SETUP_TURNS_BY_TYPE[pendingRestart.type] },
+      pendingRestart: null,
+    }));
   }
 
   async function handleReady() {
-    if (resolving) return;
+    if (match.resolving) return;
     setSelectedId(null);
     setKickMode(false);
     setKickLoft(false);
@@ -677,30 +762,31 @@ export function Game({ mode, onExitToMenu }: Props) {
     setPickingMarkTarget(false);
 
     if (mode === "ai") {
-      const withAiMoves = planAiTurn(pawns, ball, "away");
+      const withAiMoves = planAiTurn(match.pawns, match.ball, "away");
       await resolveWithPawns(withAiMoves);
       return;
     }
 
     if (mode === "solo") {
       // No opponent to plan for — the away side just never gets a plannedSteps chain.
-      await resolveWithPawns(pawns);
+      await resolveWithPawns(match.pawns);
       return;
     }
 
-    const next = new Set(readySides);
-    next.add(controllingSide);
-    setReadySides(next);
+    const next = new Set(match.readySides);
+    next.add(match.controllingSide);
 
     if (next.size < 2) {
+      setMatch((prev) => ({ ...prev, readySides: next }));
       setHandoff(true);
     } else {
-      await resolveWithPawns(pawns);
+      setMatch((prev) => ({ ...prev, readySides: next }));
+      await resolveWithPawns(match.pawns);
     }
   }
 
   function handleContinueHandoff() {
-    setControllingSide((side) => (side === "home" ? "away" : "home"));
+    setMatch((prev) => ({ ...prev, controllingSide: prev.controllingSide === "home" ? "away" : "home" }));
     setHandoff(false);
   }
 
@@ -708,7 +794,8 @@ export function Game({ mode, onExitToMenu }: Props) {
     return <p>Loading teams...</p>;
   }
 
-  if (pendingRestart) {
+  if (match.pendingRestart) {
+    const pendingRestart = match.pendingRestart;
     const sideName = pendingRestart.side === "home" ? teams[0]?.name : teams[1]?.name;
     const bonusTurns = SETUP_TURNS_BY_TYPE[pendingRestart.type];
     return (
@@ -730,7 +817,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   if (handoff) {
-    const nextSideName = controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
+    const nextSideName = match.controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
     return (
       <div className="game-wrapper handoff-screen" ref={wrapperRef}>
         <h2>Pass the computer</h2>
@@ -744,7 +831,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     );
   }
 
-  const controllingSideName = controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
+  const controllingSideName = match.controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
 
   return (
     <div className="game-wrapper" ref={wrapperRef}>
@@ -786,22 +873,22 @@ export function Game({ mode, onExitToMenu }: Props) {
           <div className="hud-top-center">
             <div className="hud-panel scoreboard">
               <span className="team-name">{teams[0]?.name}</span>
-              <span className="score">{homeScore}</span>
+              <span className="score">{match.homeScore}</span>
               <span className="vs">x</span>
-              <span className="score">{awayScore}</span>
+              <span className="score">{match.awayScore}</span>
               <span className="team-name">{teams[1]?.name}</span>
             </div>
             <div className="turn-line">
-              Turn {turn}
+              Turn {match.turn}
               {mode === "hotseat" && (
-                <span className={`turn-indicator ${controllingSide}`}> — {controllingSideName}'s turn</span>
+                <span className={`turn-indicator ${match.controllingSide}`}> — {controllingSideName}'s turn</span>
               )}
             </div>
             {pickingMarkTarget && <div className="hud-banner">Click an opponent pawn to mark.</div>}
-            {restartSetup && (
+            {match.restartSetup && (
               <div className="hud-banner">
-                Setting up for a {RESTART_TYPE_LABEL[restartSetup.deadBall.type].toLowerCase()} —{" "}
-                {restartSetup.turnsRemaining} turn{restartSetup.turnsRemaining > 1 ? "s" : ""} left
+                Setting up for a {RESTART_TYPE_LABEL[match.restartSetup.deadBall.type].toLowerCase()} —{" "}
+                {match.restartSetup.turnsRemaining} turn{match.restartSetup.turnsRemaining > 1 ? "s" : ""} left
               </div>
             )}
           </div>
@@ -813,8 +900,8 @@ export function Game({ mode, onExitToMenu }: Props) {
             <button type="button" className="exit-button hud-menu-btn" onClick={toggleFullscreen}>
               {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </button>
-            <button type="button" className="continue-button" onClick={handleReady} disabled={resolving}>
-              {resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
+            <button type="button" className="continue-button" onClick={handleReady} disabled={match.resolving}>
+              {match.resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
             </button>
           </div>
         </div>
@@ -823,8 +910,8 @@ export function Game({ mode, onExitToMenu }: Props) {
           <div className="hud-bottom-left">
             <div className="hud-panel events-log-panel">
               <div className="events-log-title">Events</div>
-              <ul className={`events-log ${events.length > 0 ? "" : "empty"}`}>
-                {events.map((e, i) => (
+              <ul className={`events-log ${match.events.length > 0 ? "" : "empty"}`}>
+                {match.events.map((e, i) => (
                   <li key={i} className={eventClass(e)}>
                     {e}
                   </li>
@@ -843,13 +930,15 @@ export function Game({ mode, onExitToMenu }: Props) {
                   <button
                     type="button"
                     className={kickMode ? "active" : ""}
-                    disabled={chargesRemaining < KICK_CHARGE_COST || restartSetup !== null}
+                    disabled={chargesRemaining < KICK_CHARGE_COST || match.restartSetup !== null}
                     onClick={() => setKickMode(true)}
                   >
                     Kick
                   </button>
                 </div>
-                {kickMode && (
+                {/* A cross is always airborne (see resolve.ts's startFlight) — the
+                    Ground/Loft choice only means anything for shot/pass. */}
+                {kickMode && kickKind !== "cross" && (
                   <div className="action-row">
                     <button type="button" className={!kickLoft ? "active" : ""} onClick={() => setKickLoft(false)}>
                       Ground

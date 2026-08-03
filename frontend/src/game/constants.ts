@@ -14,6 +14,13 @@ export const GRID_ROWS = 40;
 // finish inside a turn without needing an oversized BALL_SPEED.
 export const MOVE_RANGE = 6;
 export const KICK_RANGE = 24;
+// A pass already had good precision (aim.ts's landingSpread never widened
+// it the way a cross does) — trading range instead of accuracy is what
+// differentiates it from a cross (long range, wide spread) and a shot
+// (long range, tightens further when aimed on target). Half of KICK_RANGE
+// keeps it a genuinely short, reliable ball rather than a slightly-worse
+// shot.
+export const PASS_RANGE = KICK_RANGE / 2;
 // Units the ball covers per resolution tick once kicked — faster than a
 // pawn's dash, so it arrives as soon as it covers the real distance instead
 // of always stretching to fill every tick of the turn. Must stay high enough

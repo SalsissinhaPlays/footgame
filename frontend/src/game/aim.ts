@@ -31,11 +31,29 @@ const MIN_SIGMA = 0.08;
 // passers below it widen it. Matches the ~50-70 band the seeded players
 // currently use as a mid-table skill level.
 const REFERENCE_SKILL = 50;
+// A shot genuinely aimed on target (resolve.ts's isShotOnTarget — would it
+// cross the goal mouth if unobstructed) is a meaningfully easier strike than
+// one aimed at open space, so it tightens the spread on top of everything
+// else. This is what keeps shooting the most reliable route to goal even
+// though PASS_RANGE/CROSS_DISTANCE_SPREAD_FACTOR leave the door open for a
+// pass or cross to score too, just less reliably.
+const SHOT_ON_TARGET_SPREAD_FACTOR = 0.55;
 
-/** Standard deviation of the landing offset for a kick of this distance struck by a player of this skill. `isCross` swaps in the steeper CROSS_DISTANCE_SPREAD_FACTOR — see its own comment for why. */
-export function landingSpread(distance: number, skill: number, isCross = false): number {
-  const distanceFactor = isCross ? CROSS_DISTANCE_SPREAD_FACTOR : DISTANCE_SPREAD_FACTOR;
-  const raw = BASE_SPREAD + distance * distanceFactor - (skill - REFERENCE_SKILL) * SKILL_SPREAD_FACTOR;
+/**
+ * Standard deviation of the landing offset for a kick of this distance
+ * struck by a player of this skill. `kind` swaps in the steeper
+ * CROSS_DISTANCE_SPREAD_FACTOR for a cross; `onTarget` (shot only) applies
+ * SHOT_ON_TARGET_SPREAD_FACTOR on top — see each constant's own comment.
+ */
+export function landingSpread(
+  distance: number,
+  skill: number,
+  kind: "shot" | "pass" | "cross" = "pass",
+  onTarget = false
+): number {
+  const distanceFactor = kind === "cross" ? CROSS_DISTANCE_SPREAD_FACTOR : DISTANCE_SPREAD_FACTOR;
+  let raw = BASE_SPREAD + distance * distanceFactor - (skill - REFERENCE_SKILL) * SKILL_SPREAD_FACTOR;
+  if (kind === "shot" && onTarget) raw *= SHOT_ON_TARGET_SPREAD_FACTOR;
   return Math.max(MIN_SIGMA, raw);
 }
 
@@ -57,8 +75,14 @@ export interface LandingResult {
 }
 
 /** Samples where a kick aimed at `aim` (struck from `origin`, `distance` units away, by a player of `skill`) actually lands. */
-export function sampleLanding(aim: Vec2, distance: number, skill: number, isCross = false): LandingResult {
-  const sigma = landingSpread(distance, skill, isCross);
+export function sampleLanding(
+  aim: Vec2,
+  distance: number,
+  skill: number,
+  kind: "shot" | "pass" | "cross" = "pass",
+  onTarget = false
+): LandingResult {
+  const sigma = landingSpread(distance, skill, kind, onTarget);
   const dx = gaussian() * sigma;
   const dy = gaussian() * sigma;
   return {
@@ -68,9 +92,15 @@ export function sampleLanding(aim: Vec2, distance: number, skill: number, isCros
   };
 }
 
+// Exported so ai.ts's own risk-tolerance evaluation reads from the exact
+// same breakpoints riskLabel displays to a human player, rather than a
+// second, driftable copy of "what counts as a risky kick."
+export const RISK_SAFE_SIGMA = 0.6;
+export const RISK_VERY_RISKY_SIGMA = 1.4;
+
 /** A plain-language risk qualifier for a kick's aim spread — the same sigma the aim-ring is sized from. Moved here from the now-deleted kickIntent.ts, which owned it only because it lived next to the other aim-ring label logic; it's really just a derivative of landingSpread's own output. */
 export function riskLabel(sigma: number): string {
-  if (sigma < 0.6) return "Safe";
-  if (sigma < 1.4) return "Risky";
+  if (sigma < RISK_SAFE_SIGMA) return "Safe";
+  if (sigma < RISK_VERY_RISKY_SIGMA) return "Risky";
   return "Very risky";
 }
