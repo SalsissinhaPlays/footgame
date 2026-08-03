@@ -42,13 +42,26 @@ import {
   ROLL_STOP_EPS,
   SAVE_DIFFICULTY_THRESHOLD,
   SPRINT_SPEED_MULTIPLIER,
+  STAMINA_CHARGES_BASE,
+  STAMINA_PER_BONUS_CHARGE,
   TACKLE_RADIUS,
 } from "./constants";
 import { sampleLanding } from "./aim";
 import { resolveContest, resolveContestDetailed, rollHeaderAttempt, rollSaveAttempt } from "./contest";
 import type { ContestKind } from "./contest";
 import { attemptsReaction } from "./reactions";
-import type { Ball, Pawn, Side, Vec2 } from "./types";
+import type { Ball, Pawn, PlayerDTO, Side, Vec2 } from "./types";
+
+/**
+ * How many waypoint-leg "charges" a pawn gets this turn, from their stamina
+ * attribute — one charge per PAWN_MOVE_BUDGET-capped leg (see constants.ts).
+ * Exported for Game.tsx's click-to-plan UI (gating how many waypoints a
+ * player can add and showing the remaining count) as well as resolve.ts's
+ * own internal use.
+ */
+export function chargesFor(player: PlayerDTO): number {
+  return STAMINA_CHARGES_BASE + Math.floor(player.stamina / STAMINA_PER_BONUS_CHARGE);
+}
 
 export interface ResolveSnapshot {
   pawns: Pawn[];
@@ -289,6 +302,25 @@ export function candidateHeadings(pos: Vec2, dest: Vec2, speed: number = PAWN_SP
     const rotated = rotateVec(dir, (deg * Math.PI) / 180);
     return { x: pos.x + rotated.x * step, y: pos.y + rotated.y * step };
   });
+}
+
+/**
+ * How many ticks a pawn's full waypoint chain needs at base speed, from its
+ * current position through every planned leg in order — used only to pick a
+ * generous-enough tick-loop bound for the turn (see resolveTurn), not to
+ * predict movement exactly. Deliberately ignores dynamic per-tick effects
+ * (sprint/pressure): a pawn who ends up slowed simply doesn't finish its plan
+ * by turn's end, the same accepted degradation a single blocked leg already
+ * has today.
+ */
+function ticksForSteps(from: Vec2, steps: Vec2[]): number {
+  let total = 0;
+  let cursor = from;
+  for (const step of steps) {
+    total += distance(cursor, step);
+    cursor = step;
+  }
+  return Math.ceil(total / PAWN_SPEED_PER_TICK);
 }
 
 /** Grid cells crossed in a straight line from `start` to `end`, excluding `start`. */
@@ -768,13 +800,18 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     sliceStart = events.length;
     return slice;
   }
-  let current: Pawn[] = pawns.map((p) => ({ ...p }));
+  // Defensively clamp to each pawn's own charge budget, the same way
+  // startFlight clamps a kick to KICK_RANGE regardless of what was
+  // requested — the UI is expected to already gate this when building a
+  // chain, but resolveTurn shouldn't silently trust an input that claims
+  // more legs than the pawn's stamina actually grants.
+  let current: Pawn[] = pawns.map((p) => ({ ...p, plannedSteps: p.plannedSteps.slice(0, chargesFor(p.player)) }));
   const snapshots: ResolveSnapshot[] = [];
-  // Captured before the tick loop wipes plannedPos each tick (see the
-  // end-of-tick `plannedPos: null` reset below) — a man-marking pawn's
-  // auto-movement only kicks in when the PLAYER never gave it an explicit
-  // destination this turn; an explicit click always wins.
-  const hasExplicitPlan = new Set(current.filter((p) => p.plannedPos !== null).map((p) => p.id));
+  // Captured before the tick loop wipes plannedSteps each tick (see the
+  // end-of-tick reset below) — a man-marking pawn's auto-movement only kicks
+  // in when the PLAYER never gave it an explicit waypoint chain this turn;
+  // an explicit click always wins.
+  const hasExplicitPlan = new Set(current.filter((p) => p.plannedSteps.length > 0).map((p) => p.id));
 
   // Whoever starts the turn within capture range of the ball carries it. If
   // nobody is there, the ball just sits still until someone reaches it.
@@ -799,18 +836,29 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     );
     // The kicker releases the ball and stays put; nobody else's plan changes.
     current = current.map((p) =>
-      p.id === carrier.id ? { ...p, plannedPos: null, plannedKick: null, plannedKickLoft: false } : p
+      p.id === carrier.id ? { ...p, plannedSteps: [], plannedKick: null, plannedKickLoft: false } : p
     );
     currentCarrierId = null;
   }
 
-  // Each pawn's final destination for the turn; movement advances up to
-  // PAWN_SPEED_PER_TICK real distance toward it each tick, so a pawn blocked
-  // mid-way keeps whatever progress it already made instead of losing the
-  // whole turn. Reacting to a loose ball (below) overrides a pawn's entry
-  // here instead of needing its own movement path — it goes through the
-  // exact same candidateHeadings/collision machinery as any planned move.
-  const destinations = new Map(current.map((p) => [p.id, p.plannedPos ?? p.pos]));
+  // Each pawn's plan is now a CHAIN of waypoints (plannedSteps), not one
+  // destination — captured here, once, before the tick loop starts clearing
+  // plannedSteps every tick for display hygiene (see the end-of-tick reset
+  // below). stepCursor tracks which waypoint each pawn is currently walking
+  // toward; currentStepTarget is what `destinations` gets refreshed from at
+  // the top of every tick (below), same as the chasing/man-mark/GK blocks
+  // already refresh it for their own cases — a pawn arriving at its current
+  // waypoint just advances the cursor to the next one, going through the
+  // exact same candidateHeadings/collision machinery any planned move always
+  // did.
+  const plannedStepsById = new Map<string, Vec2[]>(current.map((p) => [p.id, p.plannedSteps]));
+  const stepCursor = new Map<string, number>(current.map((p) => [p.id, 0]));
+  function currentStepTarget(p: Pawn): Vec2 {
+    const steps = plannedStepsById.get(p.id)!;
+    return steps[stepCursor.get(p.id)!] ?? p.pos;
+  }
+
+  const destinations = new Map(current.map((p) => [p.id, currentStepTarget(p)]));
   const stopped = new Set<string>();
   // Pawns who've committed to chasing a loose ball instead of their planned
   // move, and pawns who've already had their one-time chance to react (so a
@@ -825,7 +873,25 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   let tackleCarrierId: string | null = currentCarrierId;
   const tackleAttempted = new Set<string>();
 
-  for (let tick = 0; tick < MOVE_RANGE; tick++) {
+  // A turn's tick count is no longer a fixed MOVE_RANGE — a pawn chaining
+  // several waypoints needs proportionally more ticks to actually walk the
+  // whole plan, while everyone else just keeps ticking alongside them
+  // (idling once their own, shorter plan is done, exactly like a pawn with
+  // no plan at all already does today). MOVE_RANGE stays the floor, so a
+  // turn using nothing but ordinary single-destination plans behaves
+  // identically to before.
+  const totalTicks = Math.max(MOVE_RANGE, ...current.map((p) => ticksForSteps(p.pos, p.plannedSteps)));
+
+  for (let tick = 0; tick < totalTicks; tick++) {
+    // Refresh each explicitly-planned pawn's target from wherever its step
+    // cursor currently points (advanced below, once this tick's movement has
+    // resolved, if they've arrived at it). Pawns without an explicit plan
+    // keep whatever `destinations` already holds for them — their own
+    // position, or a man-mark/GK auto-target the next two blocks refresh.
+    for (const p of current) {
+      if (hasExplicitPlan.has(p.id)) destinations.set(p.id, currentStepTarget(p));
+    }
+
     // Chasers re-aim at the ball's last known position before this tick's
     // movement resolves — one tick of "reaction time" behind where it
     // actually is, same as a human noticing and then moving.
@@ -836,8 +902,8 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     // Man-marking pawns with no explicit order re-aim every tick too, at a
     // point blended between the marked opponent's live position and the
     // marker's own current spot ("focus more, but not exclusively" — a full
-    // pull would be a blind chase). An explicit plannedPos already took
-    // priority when `destinations` was built above and is never touched here.
+    // pull would be a blind chase). An explicit plannedSteps chain already
+    // took priority in the refresh block above and is never touched here.
     for (const p of current) {
       const stance = p.stance;
       if (!stance || stance.kind !== "man_mark" || hasExplicitPlan.has(p.id)) continue;
@@ -853,7 +919,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     // shadows the ball's threat automatically, same "only re-aim pawns
     // without an explicit plan" gate man-marking uses above. This is also
     // what keeps ai.ts's AI-controlled GK sensible without touching ai.ts:
-    // ai.ts always sets an explicit plannedPos for its own GK every turn,
+    // ai.ts always sets an explicit plannedSteps chain for its own GK every turn,
     // so hasExplicitPlan is always true for it and this block simply never
     // runs for an AI-controlled keeper.
     for (const p of current) {
@@ -1016,7 +1082,23 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       }
     }
 
-    current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedPos: null }));
+    current = current.map((p) => ({ ...p, pos: intended.get(p.id)!, plannedSteps: [] }));
+
+    // A pawn that's arrived at its current waypoint (within floating-point
+    // tolerance — candidateHeadings clamps a tick's step to exactly close
+    // the remaining distance once it's within reach) advances to the next
+    // one for subsequent ticks. Only meaningful for explicitly-planned pawns
+    // — man-mark/GK auto-targets are recomputed fresh every tick regardless
+    // and never consume a "step."
+    for (const p of current) {
+      if (!hasExplicitPlan.has(p.id)) continue;
+      const steps = plannedStepsById.get(p.id)!;
+      const cursor = stepCursor.get(p.id)!;
+      const target = steps[cursor];
+      if (target && distance(p.pos, target) < 1e-6) {
+        stepCursor.set(p.id, cursor + 1);
+      }
+    }
 
     if (flight) {
       const tickStart = pointAlongFlight(flight);
@@ -1037,7 +1119,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         if (outcome.result === "goal") {
           ballPos = crossing.point;
           events.push(crossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
-          const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+          const frozen = current.map((p) => ({ ...p, plannedSteps: [], plannedKick: null }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
           return { snapshots, goal: crossing.side, deadBall: null };
         }
@@ -1201,7 +1283,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         const outcome = attemptSave(current, rollCrossing.side, rollCrossing.point, 0);
         if (outcome.result === "goal") {
           events.push(rollCrossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
-          const frozen = current.map((p) => ({ ...p, plannedPos: null, plannedKick: null }));
+          const frozen = current.map((p) => ({ ...p, plannedSteps: [], plannedKick: null }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
           return { snapshots, goal: rollCrossing.side, deadBall: null };
         }

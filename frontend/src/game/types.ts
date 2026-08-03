@@ -28,7 +28,7 @@ export type Side = "home" | "away";
 
 /**
  * A standing defensive order for this turn, layered on top of (not instead
- * of) plannedPos/plannedKick — a pawn can have an explicit destination AND
+ * of) plannedSteps/plannedKick — a pawn can have an explicit destination AND
  * a stance. Left open to future variants (offensive stances, a header-bonus
  * stance once crossing/heights exist) rather than closed off, but only
  * variants with a real mechanic to attach to belong here.
@@ -53,13 +53,21 @@ export interface Pawn {
   player: PlayerDTO;
   side: Side;
   pos: Vec2;
-  plannedPos: Vec2 | null;
-  /** Set instead of plannedPos when this pawn (must be the ball carrier) kicks/passes this turn. */
+  /**
+   * This turn's waypoint chain — an ordered list of movement destinations, walked in
+   * sequence (each leg capped at PAWN_MOVE_BUDGET distance from wherever the
+   * previous leg ended, gated by the pawn's stamina-derived charge count — see
+   * constants.ts's chargesFor). Empty = no plan this turn, same meaning the old
+   * single `plannedPos: null` had. Built by repeated clicks in Game.tsx, not a
+   * single click-and-replace.
+   */
+  plannedSteps: Vec2[];
+  /** Set instead of a plannedSteps leg when this pawn (must be the ball carrier) kicks/passes this turn. */
   plannedKick: Vec2 | null;
   /** Only meaningful when plannedKick !== null: whether this kick is a lofted (airborne) trajectory rather than grounded. Turn-scoped like plannedKick — set alongside it, reset alongside it. */
   plannedKickLoft: boolean;
   stance: Stance | null;
-  /** This turn's choice to sprint — turn-scoped like plannedPos/plannedKick/stance. */
+  /** This turn's choice to sprint — turn-scoped like plannedSteps/plannedKick/stance. */
   plannedSprint: boolean;
   /**
    * Turns remaining before sprint can be used again (0 = available). Unlike

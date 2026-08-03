@@ -36,14 +36,19 @@ export const SETUP_TURNS_BY_TYPE: Record<DeadBallResult["type"], number> = {
  * machinery exists to referee contested ball-adjacent collisions with a skill
  * check, and there's no ball or contest at stake while pawns are just getting
  * organized during a stoppage. GK auto-positioning also doesn't carry over
- * into setup turns — a keeper only moves here via an explicit plannedPos or a
- * man_mark order, same as any other pawn.
+ * into setup turns — a keeper only moves here via an explicit plannedSteps
+ * entry or a man_mark order, same as any other pawn.
+ *
+ * Deliberately single-waypoint only, even though live turns now support a
+ * full waypoint chain (see resolve.ts) — only the FIRST planned step is read
+ * here. A dead-ball setup turn is background positioning, not the core
+ * gameplay loop; multi-leg chaining during a stoppage isn't v1 scope.
  */
 export function resolveSetupTurn(pawns: Pawn[], deadBallSpot: Vec2): ResolveSnapshot[] {
   let current = pawns.map((p) => ({ ...p }));
   const snapshots: ResolveSnapshot[] = [];
-  const hasExplicitPlan = new Set(current.filter((p) => p.plannedPos).map((p) => p.id));
-  const destinations = new Map<string, Vec2>(current.map((p) => [p.id, p.plannedPos ?? p.pos]));
+  const hasExplicitPlan = new Set(current.filter((p) => p.plannedSteps.length > 0).map((p) => p.id));
+  const destinations = new Map<string, Vec2>(current.map((p) => [p.id, p.plannedSteps[0] ?? p.pos]));
 
   for (let tick = 0; tick < MOVE_RANGE; tick++) {
     for (const p of current) {
@@ -71,11 +76,11 @@ export function resolveSetupTurn(pawns: Pawn[], deadBallSpot: Vec2): ResolveSnap
       settled.set(p.id, clear ?? p.pos);
     }
 
-    // plannedPos is cleared the same way resolveTurn's own tick loop clears it
-    // — destinations was already captured before the loop started, so this is
-    // purely to keep the overlay/HUD from showing a stale planned-move marker
-    // once the turn has actually resolved.
-    current = current.map((p) => ({ ...p, pos: settled.get(p.id)!, plannedPos: null }));
+    // plannedSteps is cleared the same way resolveTurn's own tick loop clears
+    // it — destinations was already captured before the loop started, so this
+    // is purely to keep the overlay/HUD from showing a stale planned-move
+    // marker once the turn has actually resolved.
+    current = current.map((p) => ({ ...p, pos: settled.get(p.id)!, plannedSteps: [] }));
     snapshots.push({
       pawns: current.map((p) => ({ ...p })),
       ball: { ...deadBallSpot },

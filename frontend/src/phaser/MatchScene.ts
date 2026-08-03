@@ -406,8 +406,16 @@ export class MatchScene extends Phaser.Scene {
     const selectedPawn = pawns.find((pw) => pw.id === selectedId);
     if (!selectedPawn) return;
     const p = this.projector;
-    const cx = selectedPawn.pos.x + 0.5;
-    const cy = selectedPawn.pos.y + 0.5;
+    // Move mode's reach circle extends from wherever the chain currently
+    // ends (the last already-planned waypoint), not always the pawn's real
+    // position — each click adds a leg from there, not from the start.
+    // Kick mode always measures from the pawn's actual position: a kick
+    // isn't part of a waypoint chain (see resolve.ts), it replaces movement
+    // entirely for the turn, exactly as it always has.
+    const steps = selectedPawn.plannedSteps;
+    const origin = kickMode || steps.length === 0 ? selectedPawn.pos : steps[steps.length - 1];
+    const cx = origin.x + 0.5;
+    const cy = origin.y + 0.5;
     const reachPts = isoCircle(p, cx, cy, reachRadius);
 
     if (!kickMode) {
@@ -508,7 +516,7 @@ export class MatchScene extends Phaser.Scene {
       const visible =
         pawn.side === controllingSide
           ? pawn
-          : { ...pawn, plannedPos: null, plannedKick: null, stance: null, plannedSprint: false };
+          : { ...pawn, plannedSteps: [], plannedKick: null, stance: null, plannedSprint: false };
       let visual = this.pawnVisuals.get(pawn.id);
       if (!visual) {
         visual = this.createPawnVisual(pawn);
@@ -694,14 +702,28 @@ export class MatchScene extends Phaser.Scene {
           g.lineBetween(base.x, base.y, targetIso.x, targetIso.y);
         }
       }
-      if (pawn.plannedPos) {
-        const planned = p.toIso(pawn.plannedPos.x + 0.5, pawn.plannedPos.y + 0.5);
-        g.lineStyle(2.5, 0xffeb3b, 1);
-        g.lineBetween(base.x, base.y, planned.x, planned.y);
-        g.fillStyle(pawn.side === "home" ? 0x1565c0 : 0xc62828, 0.35);
-        g.lineStyle(2, 0xffeb3b, 1);
-        g.fillEllipse(planned.x, planned.y, 32, 16);
-        g.strokeEllipse(planned.x, planned.y, 32, 16);
+      if (pawn.plannedSteps.length > 0) {
+        // A full waypoint chain draws as a connected polyline — one segment
+        // per leg — with a small marker at each intermediate waypoint and
+        // the same full "destination" ellipse only at the final one, so the
+        // last stop in the chain still reads the same way a single planned
+        // move always did.
+        let from = base;
+        pawn.plannedSteps.forEach((step, i) => {
+          const to = p.toIso(step.x + 0.5, step.y + 0.5);
+          g.lineStyle(2.5, 0xffeb3b, 1);
+          g.lineBetween(from.x, from.y, to.x, to.y);
+          g.fillStyle(pawn.side === "home" ? 0x1565c0 : 0xc62828, 0.35);
+          g.lineStyle(2, 0xffeb3b, 1);
+          if (i === pawn.plannedSteps.length - 1) {
+            g.fillEllipse(to.x, to.y, 32, 16);
+            g.strokeEllipse(to.x, to.y, 32, 16);
+          } else {
+            g.fillCircle(to.x, to.y, 6 / zoom);
+            g.strokeCircle(to.x, to.y, 6 / zoom);
+          }
+          from = to;
+        });
       }
       if (pawn.plannedKick) {
         const kick = p.toIso(pawn.plannedKick.x + 0.5, pawn.plannedKick.y + 0.5);

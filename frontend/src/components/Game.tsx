@@ -14,7 +14,7 @@ import {
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
 import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
-import { resolveTurn } from "../game/resolve";
+import { chargesFor, resolveTurn } from "../game/resolve";
 import type { DeadBallResult } from "../game/resolve";
 import { resolveSetupTurn, SETUP_TURNS_BY_TYPE } from "../game/restartSetup";
 import type { Ball, Pawn, Stance, TeamDTO, Vec2 } from "../game/types";
@@ -315,16 +315,29 @@ export function Game({ mode, onExitToMenu }: Props) {
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
   const selectedIsCarrier = !!selectedPawn && isCarrier(selectedPawn);
 
-  // How far (world units) the selected pawn can move/kick this turn — the
-  // radius the reach-circle overlay draws, and the same budget a click has
-  // to fall within to register. Both move and kick are plain Euclidean
-  // circles now that targeting is continuous, not tied to grid cells.
+  // How far (world units) a single waypoint LEG can reach — the radius the
+  // reach-circle overlay draws (from wherever the chain currently ends, see
+  // MatchScene's updateReachHighlight), and the budget a click has to fall
+  // within to register. Both move and kick are plain Euclidean circles now
+  // that targeting is continuous, not tied to grid cells.
   const moveBudget = selectedPawn?.plannedSprint ? PAWN_MOVE_BUDGET * SPRINT_SPEED_MULTIPLIER : PAWN_MOVE_BUDGET;
-  const reachRadius = selectedPawn ? (kickMode && selectedIsCarrier ? KICK_RANGE : moveBudget) : null;
+  // Charges gate how many legs a pawn can chain this turn (see resolve.ts's
+  // chargesFor) — kicks don't spend a charge yet (Increment 2's job).
+  const totalCharges = selectedPawn ? chargesFor(selectedPawn.player) : 0;
+  const chargesUsed = selectedPawn?.plannedSteps.length ?? 0;
+  const chargesRemaining = totalCharges - chargesUsed;
+  const reachRadius = selectedPawn
+    ? kickMode && selectedIsCarrier
+      ? KICK_RANGE
+      : chargesRemaining > 0
+        ? moveBudget
+        : null
+    : null;
 
-  // Clicking within this distance of the selected pawn's own position cancels
-  // its planned move instead of setting a new one — the continuous
-  // equivalent of "clicking the cell you're already standing on."
+  // Clicking within this distance of the chain's current end (or the pawn's
+  // own position, with no waypoints yet) undoes the last waypoint instead of
+  // adding a new one — the continuous equivalent of "clicking the cell
+  // you're already standing on."
   const CANCEL_CLICK_EPS = 0.5;
 
   function handlePawnClick(pawn: Pawn) {
@@ -349,32 +362,55 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   function handleFieldClick(point: Vec2) {
     if (resolving) return;
-    if (!selectedPawn || reachRadius === null) return;
+    if (!selectedPawn) return;
     if (!inBounds(point)) return;
-    if (euclideanDistance(selectedPawn.pos, point) > reachRadius) return;
 
     if (kickMode && selectedIsCarrier) {
+      if (reachRadius === null || euclideanDistance(selectedPawn.pos, point) > reachRadius) return;
       setPawns((prev) =>
         prev.map((p) =>
           p.id === selectedPawn.id
-            ? { ...p, plannedKick: point, plannedPos: null, plannedKickLoft: kickLoft }
+            ? { ...p, plannedKick: point, plannedSteps: [], plannedKickLoft: kickLoft }
             : p
         )
       );
-    } else {
-      const cancel = euclideanDistance(selectedPawn.pos, point) < CANCEL_CLICK_EPS;
-      setPawns((prev) =>
-        prev.map((p) =>
-          p.id === selectedPawn.id
-            ? { ...p, plannedPos: cancel ? null : point, plannedKick: null, plannedKickLoft: false }
-            : p
-        )
-      );
+      // A kick fully commits the pawn's turn — unlike a move click, which
+      // stays selected so the next click can extend the same chain.
+      setSelectedId(null);
+      setKickMode(false);
+      setKickLoft(false);
+      setPickingMarkTarget(false);
+      return;
     }
-    setSelectedId(null);
-    setKickMode(false);
-    setKickLoft(false);
-    setPickingMarkTarget(false);
+
+    // Move mode: building a waypoint chain one click at a time. Each leg
+    // extends from wherever the chain currently ends, not from the pawn's
+    // real position — that's what lets repeated clicks keep chaining rather
+    // than always replacing a single destination.
+    const steps = selectedPawn.plannedSteps;
+    const origin = steps.length > 0 ? steps[steps.length - 1] : selectedPawn.pos;
+
+    if (euclideanDistance(origin, point) < CANCEL_CLICK_EPS) {
+      if (steps.length > 0) {
+        setPawns((prev) =>
+          prev.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p))
+        );
+      }
+      return;
+    }
+
+    if (chargesRemaining <= 0) return;
+    if (euclideanDistance(origin, point) > moveBudget) return;
+
+    setPawns((prev) =>
+      prev.map((p) =>
+        p.id === selectedPawn.id
+          ? { ...p, plannedSteps: [...p.plannedSteps, point], plannedKick: null, plannedKickLoft: false }
+          : p
+      )
+    );
+    // Deliberately stays selected — the pawn keeps taking clicks to extend
+    // its chain until the player selects someone/something else.
   }
 
   /** Sets (or clears, with `null`) the selected pawn's stance for this turn. */
@@ -581,7 +617,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
 
     if (mode === "solo") {
-      // No opponent to plan for — the away side just never gets a plannedPos/plannedKick.
+      // No opponent to plan for — the away side just never gets a plannedSteps/plannedKick.
       await resolveWithPawns(pawns);
       return;
     }
@@ -655,6 +691,9 @@ export function Game({ mode, onExitToMenu }: Props) {
                   #{selectedPawn.player.jersey_number} {selectedPawn.player.name}
                 </div>
                 <div className="pawn-info-row">Stance: {stanceLabel(selectedPawn.stance)}</div>
+                <div className="pawn-info-row">
+                  Charges: {chargesRemaining}/{totalCharges}
+                </div>
                 <div className="pawn-info-row">
                   Sprint:{" "}
                   {selectedPawn.plannedSprint
@@ -791,21 +830,23 @@ export function Game({ mode, onExitToMenu }: Props) {
 
       {mode === "ai" ? (
         <p className="hint">
-          Click a blue pawn, then a highlighted cell to plan its move. Whoever is standing on the
-          ball carries it when they move. Click "Continue" to see what the computer-controlled
-          opponent does.
+          Click a blue pawn, then keep clicking to chain waypoints for its move — each pawn has a
+          limited number of charges per turn. Whoever is standing on the ball carries it when they
+          move. Click "Continue" to see what the computer-controlled opponent does.
         </p>
       ) : mode === "solo" ? (
         <p className="hint">
-          Click a blue pawn, then a highlighted cell to plan its move. Whoever is standing on the
-          ball carries it when they move. The opposing team stays put in this mode — it's just for
-          testing the mechanics. Click "Continue" to run it.
+          Click a blue pawn, then keep clicking to chain waypoints for its move — each pawn has a
+          limited number of charges per turn. Whoever is standing on the ball carries it when they
+          move. The opposing team stays put in this mode — it's just for testing the mechanics.
+          Click "Continue" to run it.
         </p>
       ) : (
         <p className="hint">
-          Click a pawn on the team in control, then a highlighted cell to plan its move. Whoever is
-          standing on the ball carries it when they move. Click "Ready" when you're done planning —
-          the other team can't see your moves until resolution.
+          Click a pawn on the team in control, then keep clicking to chain waypoints for its move —
+          each pawn has a limited number of charges per turn. Whoever is standing on the ball
+          carries it when they move. Click "Ready" when you're done planning — the other team can't
+          see your moves until resolution.
         </p>
       )}
       <p className="camera-hint">

@@ -152,9 +152,24 @@ export const REACT_RADIUS = 4.5;
 export const PAWN_SPEED_PER_TICK = 1;
 // Minimum distance kept between any two pawns.
 export const PAWN_COLLISION_RADIUS = 1.4;
-// Total real-distance reach for a turn's move, used wherever planning
-// (human click or AI) decides which destinations are reachable this turn.
+// Total real-distance reach for a single waypoint leg, used wherever planning
+// (human click or AI) decides which destinations are reachable for the NEXT
+// leg — not the whole turn any more, since a turn can now chain several legs
+// (see the stamina/charge constants below and resolve.ts's chargesFor).
 export const PAWN_MOVE_BUDGET = MOVE_RANGE * PAWN_SPEED_PER_TICK;
+
+// A pawn's per-turn "charge" budget (see resolve.ts's chargesFor) — one
+// waypoint leg costs one charge, capped at PAWN_MOVE_BUDGET distance each.
+// Explicitly modeled after Divinity: Original Sin 2's charge system (a
+// handful of charges per turn, each move costs one and covers up to a fixed
+// distance) rather than a continuous fatigue meter — the `stamina` attribute
+// (0-100) scales how many charges a pawn gets, so a fitter player can chain
+// more legs in one turn, not just move faster within a single one.
+// STAMINA_CHARGES_BASE guarantees every pawn keeps at least today's one
+// full-budget move even at 0 stamina. Starting points for playtesting, like
+// every other tunable here.
+export const STAMINA_CHARGES_BASE = 2;
+export const STAMINA_PER_BONUS_CHARGE = 25;
 
 // How close an opponent has to get to a dribbling ball carrier before they
 // can attempt a tackle — a bit more generous than PAWN_COLLISION_RADIUS
@@ -180,7 +195,7 @@ export const STANCE_COVER_PASSING_SKILL_FACTOR = 0.15;
 export const STANCE_MAN_MARK_SKILL_FACTOR = 0.1;
 export const STANCE_MAN_MARK_PACE_FACTOR = 0.1;
 
-// How strongly a man-marking pawn (with no explicit plannedPos) is pulled
+// How strongly a man-marking pawn (with no explicit plannedSteps) is pulled
 // toward its target's live position each tick — 1 would be a blind full
 // chase; this keeps some positional discipline instead ("focus more, but
 // not exclusively"). Recomputed fresh every tick against the target's

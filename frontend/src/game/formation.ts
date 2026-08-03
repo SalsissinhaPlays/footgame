@@ -34,7 +34,7 @@ export function buildFormation(players: PlayerDTO[], side: Side, formation: Form
       player,
       side,
       pos,
-      plannedPos: null,
+      plannedSteps: [],
       plannedKick: null,
       plannedKickLoft: false,
       stance: null,
