@@ -30,6 +30,7 @@ import {
   LOFT_APEX_MAX,
   LOFT_APEX_MIN,
   MAN_MARK_PULL_WEIGHT,
+  MISHIT_SIGMA_MULTIPLIER,
   MOVE_RANGE,
   OOB_CELLS,
   PAWN_COLLISION_RADIUS,
@@ -368,6 +369,36 @@ function ticksForSteps(from: Vec2, steps: PlannedStep[]): number {
   return Math.ceil(total / PAWN_SPEED_PER_TICK);
 }
 
+/**
+ * The tick offset (from the start of the turn) at which the LAST kick step
+ * in this pawn's plan would fire, counting only the movement legs that
+ * precede it — or null if the plan has no kick step at all. `BALL_SPEED`'s
+ * own comment in constants.ts documents the original guarantee: a kick's
+ * flight always had a full MOVE_RANGE ticks of runway ahead of it, because a
+ * kick always fired at tick 0. Once a kick can fire anywhere in a chain
+ * (mid-turn, after some movement), that guarantee silently broke unless the
+ * tick-loop bound (see resolveTurn's totalTicks) is stretched to compensate
+ * — otherwise a kick fired late in a short turn can run out of loop ticks
+ * before its flight finishes, leaving the ball visibly frozen mid-flight
+ * (a real bug this was written to fix, caught via user report + the
+ * throwaway-script pattern before it, testing only movement-only plans,
+ * didn't happen to exercise a late-firing kick).
+ */
+function latestKickFireTick(from: Vec2, steps: PlannedStep[]): number | null {
+  let ticksSoFar = 0;
+  let cursor = from;
+  let latest: number | null = null;
+  for (const step of steps) {
+    if (step.kick) {
+      latest = ticksSoFar;
+    } else {
+      ticksSoFar += Math.ceil(distance(cursor, step.pos) / PAWN_SPEED_PER_TICK);
+      cursor = step.pos;
+    }
+  }
+  return latest;
+}
+
 /** Grid cells crossed in a straight line from `start` to `end`, excluding `start`. */
 export function lineCells(start: Vec2, end: Vec2): Vec2[] {
   const dist = Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y), 1);
@@ -499,7 +530,7 @@ function startFlight(carrier: Pawn, rawTarget: Vec2, loft: boolean): FlightStart
       apexHeight,
       contested: new Set(),
     },
-    mishit: landing.missBy > landing.sigma,
+    mishit: landing.missBy > landing.sigma * MISHIT_SIGMA_MULTIPLIER,
   };
 }
 
@@ -536,7 +567,7 @@ function startHeaderFlight(winner: Pawn, contactPoint: Vec2, rawTarget: Vec2): F
       apexHeight: 0,
       contested: new Set(),
     },
-    mishit: landing.missBy > landing.sigma,
+    mishit: landing.missBy > landing.sigma * MISHIT_SIGMA_MULTIPLIER,
   };
 }
 
@@ -913,8 +944,19 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   // (idling once their own, shorter plan is done, exactly like a pawn with
   // no plan at all already does today). MOVE_RANGE stays the floor, so a
   // turn using nothing but ordinary single-destination plans behaves
-  // identically to before.
-  const totalTicks = Math.max(MOVE_RANGE, ...current.map((p) => ticksForSteps(p.pos, p.plannedSteps)));
+  // identically to before. Any kick anywhere in any pawn's plan also needs
+  // a full MOVE_RANGE ticks of runway AFTER the tick it fires on (see
+  // latestKickFireTick's own doc comment) — without this, a kick fired
+  // partway through a short turn could run out of loop ticks before its
+  // flight finishes, freezing the ball visibly mid-air/mid-roll.
+  const kickFireTicks = current
+    .map((p) => latestKickFireTick(p.pos, p.plannedSteps))
+    .filter((t): t is number => t !== null);
+  const totalTicks = Math.max(
+    MOVE_RANGE,
+    ...current.map((p) => ticksForSteps(p.pos, p.plannedSteps)),
+    ...kickFireTicks.map((t) => t + MOVE_RANGE)
+  );
 
   for (let tick = 0; tick < totalTicks; tick++) {
     // Kick steps are instantaneous actions (their `pos` is an aim target,

@@ -369,8 +369,14 @@ export function Game({ mode, onExitToMenu }: Props) {
   // Clicking within this distance of the chain's current end (or the pawn's
   // own position, with no waypoints yet) undoes the last step instead of
   // adding a new one — the continuous equivalent of "clicking the cell
-  // you're already standing on."
-  const CANCEL_CLICK_EPS = 0.5;
+  // you're already standing on." 0.5 (the original single-destination-era
+  // value, when this only ever had to catch a click on the pawn's own
+  // sprite) turned out too tight to reliably hit once waypoint markers
+  // became small on-field dots rather than the pawn itself — bumped up to a
+  // "personal space"-scale radius (matching CAPTURE_RADIUS) so an undo
+  // click doesn't require pixel-perfect precision through the isometric
+  // projection.
+  const CANCEL_CLICK_EPS = 1.2;
 
   function handlePawnClick(pawn: Pawn) {
     if (resolving) return;

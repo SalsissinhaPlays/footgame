@@ -21,6 +21,18 @@ export const KICK_RANGE = 24;
 // kick would run out of ticks mid-flight and just stop dead in open space.
 export const BALL_SPEED = 5;
 
+// A kick/header's "off target" event label fires when the sampled landing
+// point (aim.ts's sampleLanding) misses the aim point by more than this many
+// multiples of that kick's own sigma. missBy is the magnitude of a 2D
+// Gaussian offset, i.e. Rayleigh-distributed with scale sigma — a naive
+// `missBy > sigma` (multiplier 1) actually fires on ~61% of ALL kicks
+// (P(R > sigma) = exp(-0.5)), making "off target" the common case instead of
+// a genuinely bad strike. 1.9 targets a much more sensible ~16%
+// (exp(-1.9^2/2)) — this only changes which kicks get labeled "off target"
+// in the event log, not where the ball actually lands (sampleLanding's
+// output is identical either way).
+export const MISHIT_SIGMA_MULTIPLIER = 1.9;
+
 // Goal mouth: rows the ball must be in, at column 0 (home goal) or
 // GRID_COLS - 1 (away goal), for a goal to count.
 export const GOAL_ROW_MIN = 17;
