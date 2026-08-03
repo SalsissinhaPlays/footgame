@@ -68,6 +68,16 @@ const TWEEN_MS = 350;
 const BALL_GROUND_LIFT = 10;
 const BALL_HEIGHT_PX_PER_UNIT = 14;
 
+// A pawn/field "click" only fires on release, and only if the pointer never
+// traveled further than this (in Phaser's game-pixel space) between its down
+// and up events — otherwise it's a camera drag (left-click-drag panning),
+// not a click, and gets silently dropped rather than also placing a
+// waypoint/kick under the drag's starting point. Also what makes a
+// right-click never register as a game action in the first place (see the
+// left-button guards below) — a right-click's whole point is to reach
+// Game.tsx's onContextMenu handler undisturbed.
+const CLICK_DRAG_THRESHOLD = 6;
+
 /**
  * How tall (in the same view-space pixels updateBall lifts the ball sprite
  * by) a lofted kick's on-screen arc preview should bulge for a kick of this
@@ -128,6 +138,11 @@ export class MatchScene extends Phaser.Scene {
   // outside rendering needs it, so it stays local to the scene rather than
   // round-tripping through React.
   private hoverPoint: Vec2 | null = null;
+  // Set on a left-button pointerdown over a pawn or the field, cleared and
+  // acted on at pointerup (see CLICK_DRAG_THRESHOLD) — deferring the actual
+  // click this way is what lets a left-click-drag pan the camera instead of
+  // planting a waypoint/kick at wherever the drag started.
+  private pendingClick: { type: "pawn"; id: string } | { type: "field"; point: Vec2 } | null = null;
   private lastRotation: number | null = null;
   private lastTilt: number | null = null;
   // Scale needed to fit the fixed-size isometric world into the actual
@@ -192,8 +207,15 @@ export class MatchScene extends Phaser.Scene {
       .setInteractive()
       .setDepth(-1);
     this.fieldZone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      // Only the left button plans a move/kick — a right-click here is
+      // aiming to deselect/undo via Game.tsx's onContextMenu, and a
+      // middle/side-button press is orbiting the camera; neither should
+      // also queue a field click. A left-button press just records where it
+      // started — see the scene-wide "pointerup" listener below for where
+      // this either fires as a real click or gets dropped as a drag.
+      if (!pointer.leftButtonDown()) return;
       const point = this.projector.fromIso(pointer.worldX, pointer.worldY);
-      this.callbacks?.onFieldClick(point);
+      this.pendingClick = { type: "field", point };
     });
     // Drives the live "mortar aim" cross preview (updateOverlay) — redrawn
     // directly here rather than waiting for React's next render, since
@@ -202,6 +224,19 @@ export class MatchScene extends Phaser.Scene {
     this.fieldZone.on("pointermove", (pointer: Phaser.Input.Pointer) => {
       this.hoverPoint = this.projector.fromIso(pointer.worldX, pointer.worldY);
       this.updateOverlay();
+    });
+
+    // Fires whatever pawn/field click was pending, but only if the pointer
+    // never moved more than CLICK_DRAG_THRESHOLD since its pointerdown — a
+    // genuine left-click-drag pan (Game.tsx's own mouse handlers) always
+    // exceeds that, so this naturally never fires a stray click at the
+    // drag's starting point.
+    this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+      const pending = this.pendingClick;
+      this.pendingClick = null;
+      if (!pending || pointer.getDistance() > CLICK_DRAG_THRESHOLD) return;
+      if (pending.type === "pawn") this.callbacks?.onPawnClick(pending.id);
+      else this.callbacks?.onFieldClick(pending.point);
     });
 
     this.handleResize(this.scale.gameSize);
@@ -633,7 +668,14 @@ export class MatchScene extends Phaser.Scene {
       ),
       Phaser.Geom.Rectangle.Contains
     );
-    container.on("pointerdown", () => this.callbacks?.onPawnClick(pawn.id));
+    // Left button only, and deferred to pointerup — see the fieldZone
+    // pointerdown/pointerup comments above for why (right-click must reach
+    // Game.tsx's deselect handler untouched, and a left-click-drag needs to
+    // be free to pan the camera instead of reselecting this pawn).
+    container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.leftButtonDown()) return;
+      this.pendingClick = { type: "pawn", id: pawn.id };
+    });
 
     return { container, sprite, badgeBg, badgeText, lastGridPos: { ...pawn.pos } };
   }

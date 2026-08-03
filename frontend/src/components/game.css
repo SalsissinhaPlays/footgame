@@ -120,6 +120,21 @@
   display: none;
 }
 
+/* The Fullscreen toggle stays visible (unlike the Menu button above) even
+   in fullscreen — Escape can't be repurposed to exit fullscreen (the browser
+   always exits fullscreen on Escape, no way to prevent it), so this is the
+   one actual way out short of that. Kept small and low-opacity so it doesn't
+   compete with "Continue"/"Ready" right next to it. */
+.game-wrapper:fullscreen .fullscreen-toggle-btn {
+  opacity: 0.45;
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+.game-wrapper:fullscreen .fullscreen-toggle-btn:hover {
+  opacity: 1;
+}
+
 /* ---------- Shared panel chrome ---------- */
 
 .hud-panel {
@@ -260,9 +275,21 @@
   padding: 0;
   list-style: none;
   font-size: 12px;
-  max-height: 160px;
+  /* Taller than before now that history persists across turns instead of
+     resetting — there's actually something to scroll through. */
+  max-height: 240px;
   overflow-y: auto;
   text-align: left;
+}
+
+.events-log .event-turn-marker {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
 }
 
 .events-log li {

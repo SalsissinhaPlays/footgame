@@ -76,6 +76,7 @@ function inBounds(pos: Vec2): boolean {
  * project's own test scripts already use to check which event fired.
  */
 function eventClass(e: string): string {
+  if (e.startsWith("Turn ")) return "event-turn-marker";
   if (e.includes("GOAL")) return "event-goal";
   if (e.includes("Interception:") || e.includes("Tackle:")) return "event-turnover";
   if (e.includes("half-tackles") || e.includes("half-blocks")) return "event-contested";
@@ -190,6 +191,9 @@ const ZOOM_MAX = 10;
 // the current pitch scale) — divided by the user's zoom below so panning
 // feels like a consistent speed on screen regardless of how zoomed in.
 const PAN_SPEED = 2600;
+// Degrees per second Q/E rotate the camera — a keyboard alternative to the
+// middle/side-mouse-button drag, since not every mouse has those buttons.
+const ROTATE_KEY_SPEED = 90;
 
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -208,6 +212,24 @@ export function Game({ mode, onExitToMenu }: Props) {
     startRotation: 0,
     startTilt: TILT_DEFAULT,
   });
+  // Left-click-drag panning — "grab the field and move it." Tracks the
+  // camera's focus at drag-start rather than accumulating per-frame deltas,
+  // same reasoning as rotateState: recomputing from a fixed start avoids
+  // drift over a long drag.
+  const panState = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    startFocusX: number;
+    startFocusY: number;
+  }>({ active: false, startX: 0, startY: 0, startFocusX: 0, startFocusY: 0 });
+  // Escape needs to fire an action defined further down (deselectPawn, which
+  // closes over match/selectedPawn) from a keydown listener that's only ever
+  // attached once (mount-only effect, empty deps) — same
+  // attach-once-but-stay-fresh problem handlersRef already solves for
+  // Phaser's click callbacks, solved the same way here.
+  const keyActionsRef = useRef<{ deselect: () => void }>({ deselect: () => {} });
+  const eventsLogRef = useRef<HTMLUListElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   // The camera's pan is tracked as a WORLD-space point to look at (grid
@@ -287,8 +309,12 @@ export function Game({ mode, onExitToMenu }: Props) {
   // holding a key pans smoothly and proportionally to real elapsed time.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        keyActionsRef.current.deselect();
+        return;
+      }
       const key = e.key.toLowerCase();
-      if (key === "w" || key === "a" || key === "s" || key === "d") {
+      if (key === "w" || key === "a" || key === "s" || key === "d" || key === "q" || key === "e") {
         pressedKeys.current.add(key);
       }
     }
@@ -313,10 +339,14 @@ export function Game({ mode, onExitToMenu }: Props) {
           if (keys.has("d")) dx += speed;
           if (keys.has("w")) dy -= speed;
           if (keys.has("s")) dy += speed;
-          const projector = createProjector(c.rotation, c.tilt);
+          let rotation = c.rotation;
+          if (keys.has("q")) rotation -= ROTATE_KEY_SPEED * dt;
+          if (keys.has("e")) rotation += ROTATE_KEY_SPEED * dt;
+          rotation = ((rotation % 360) + 360) % 360;
+          const projector = createProjector(rotation, c.tilt);
           const currentView = projector.toIso(c.focusX, c.focusY);
           const nextFocus = projector.fromIso(currentView.x + dx, currentView.y + dy);
-          return { ...c, focusX: nextFocus.x, focusY: nextFocus.y };
+          return { ...c, rotation, focusX: nextFocus.x, focusY: nextFocus.y };
         });
       }
       raf = requestAnimationFrame(tick);
@@ -348,6 +378,22 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function handleViewportMouseDown(e: ReactMouseEvent) {
+    // Left button (0) grabs and pans the field. A genuine click (select a
+    // pawn, plan a waypoint/kick) is decided independently over in
+    // MatchScene's own pointerdown/pointerup — it only fires if the pointer
+    // never traveled past CLICK_DRAG_THRESHOLD, so starting a pan-drag here
+    // unconditionally on every left mousedown never steals an actual click.
+    if (e.button === 0) {
+      e.preventDefault();
+      panState.current = {
+        active: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        startFocusX: camera.focusX,
+        startFocusY: camera.focusY,
+      };
+      return;
+    }
     // Middle button (1) or the side "back"/"forward" buttons (3/4) orbit the camera.
     if (e.button !== 1 && e.button !== 3 && e.button !== 4) return;
     e.preventDefault();
@@ -361,6 +407,28 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   function handleViewportMouseMove(e: ReactMouseEvent) {
+    if (panState.current.active) {
+      e.preventDefault();
+      const dx = e.clientX - panState.current.startX;
+      const dy = e.clientY - panState.current.startY;
+      // The actual on-screen zoom (fitZoom * the user's own zoom) — reading
+      // it straight from Phaser's camera is what makes a drag track the
+      // cursor 1:1 regardless of how zoomed in/out the view currently is,
+      // rather than guessing at a screen-pixel-to-world-unit ratio here.
+      const zoom = sceneRef.current?.cameras.main.zoom || 1;
+      const dxView = dx / zoom;
+      const dyView = dy / zoom;
+      setCamera((c) => {
+        const projector = createProjector(c.rotation, c.tilt);
+        const startView = projector.toIso(panState.current.startFocusX, panState.current.startFocusY);
+        // Subtracting (not adding) the delta is what makes the field follow
+        // the cursor like it's actually being grabbed: dragging right reveals
+        // what was to the left, which means the camera's own focus moves left.
+        const nextFocus = projector.fromIso(startView.x - dxView, startView.y - dyView);
+        return { ...c, focusX: nextFocus.x, focusY: nextFocus.y };
+      });
+      return;
+    }
     if (!rotateState.current.active) return;
     e.preventDefault();
     const dx = e.clientX - rotateState.current.startX;
@@ -372,6 +440,7 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   function stopRotating() {
     rotateState.current.active = false;
+    panState.current.active = false;
   }
 
   function resetCamera() {
@@ -466,7 +535,13 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (!inBounds(point)) return;
 
     if (kickMode) {
-      if (reachRadius === null || euclideanDistance(chainEnd, point) > reachRadius) return;
+      if (reachRadius === null || euclideanDistance(chainEnd, point) > reachRadius) {
+        // Nothing left to spend on a kick either — a field click can't do
+        // anything useful anymore, so treat it as "I'm done with this pawn"
+        // instead of a silent no-op that leaves it stuck selected.
+        if (chargesRemaining <= 0) deselectPawn();
+        return;
+      }
       // A cross is airborne by definition — always lofted regardless of the
       // Ground/Loft toggle (which stays a real choice for shot/pass). Also
       // enforced defensively in resolve.ts's startFlight, so this isn't the
@@ -515,7 +590,15 @@ export function Game({ mode, onExitToMenu }: Props) {
       return;
     }
 
-    if (chargesRemaining <= 0 || distanceRemaining <= 0) return;
+    if (chargesRemaining <= 0 || distanceRemaining <= 0) {
+      // Nothing left in this pawn's move budget — a further field click
+      // can't plan anything else, so it deselects instead of doing nothing.
+      // This is what makes "spend the whole turn, then click elsewhere"
+      // enough to move on to the next pawn, without having to right-click
+      // through every queued step first just to get back to unselected.
+      deselectPawn();
+      return;
+    }
     // A click beyond the reachable distance still plans a waypoint — just
     // clamped to the edge of what's actually reachable, in the direction
     // clicked, rather than silently doing nothing.
@@ -537,16 +620,40 @@ export function Game({ mode, onExitToMenu }: Props) {
   }
 
   /**
-   * Right-click on the pitch undoes the selected pawn's last planned step
-   * when it has one — a reliable, position-independent alternative to
-   * clicking back near the chain's current end (handleFieldClick's
-   * CANCEL_CLICK_EPS check), which still requires some precision. Once
-   * there's nothing left to undo, right-click instead deselects the pawn
-   * entirely — a quick way out of planning without needing to re-find and
-   * click the same pawn again. Also suppresses the browser's native
+   * Deselects whatever pawn is currently selected and clears every
+   * planning-mode toggle that goes with it — shared by right-click and the
+   * Escape key (see below) so both have one definition of "deselect" to stay
+   * in sync. Undoing a planned step is a separate action now (still
+   * available via clicking back near the chain's current end — see
+   * handleFieldClick's CANCEL_CLICK_EPS check); right-click no longer tries
+   * to undo first, since that made a right-click that expected an immediate
+   * deselect look like it "didn't do anything" whenever the pawn still had
+   * queued steps.
+   */
+  function deselectPawn() {
+    if (match.resolving || !selectedPawn) return;
+    setSelectedId(null);
+    setKickMode(false);
+    setKickLoft(false);
+    setKickKind("pass");
+    setPickingMarkTarget(false);
+    setStanceMenuOpen(false);
+  }
+
+  /**
+   * Right-click undoes the selected pawn's last planned step when it has
+   * one — a reliable, position-independent alternative to clicking back
+   * near the chain's current end (handleFieldClick's CANCEL_CLICK_EPS
+   * check), which still requires some precision. Deselecting the pawn
+   * entirely is the LAST thing right-click does, once there's nothing left
+   * to undo — not the first, so a right-click never silently throws away a
+   * whole queued plan in one click. (Escape, above, is the instant
+   * full-deselect instead.) Also suppresses the browser's native
    * right-click context menu on the canvas, which otherwise pops up and
    * blocks the view — nothing in this game uses right click for anything
-   * else.
+   * else. (MatchScene's own pointerdown handlers ignore any button but the
+   * left one, so this reaches here undisturbed instead of also
+   * re-triggering a pawn/field click the way it used to.)
    */
   function handleViewportContextMenu(e: ReactMouseEvent) {
     e.preventDefault();
@@ -558,12 +665,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       }));
       return;
     }
-    setSelectedId(null);
-    setKickMode(false);
-    setKickLoft(false);
-    setKickKind("pass");
-    setPickingMarkTarget(false);
-    setStanceMenuOpen(false);
+    deselectPawn();
   }
 
   /** Sets (or clears, with `null`) the selected pawn's stance for this turn. */
@@ -596,6 +698,12 @@ export function Game({ mode, onExitToMenu }: Props) {
     }));
   }
 
+  // Same stale-closure fix as handlersRef just below, for the mount-once
+  // Escape key listener instead of Phaser's callbacks.
+  useEffect(() => {
+    keyActionsRef.current = { deselect: deselectPawn };
+  });
+
   // Keep the Phaser-facing callbacks stable (set once when the scene mounts)
   // while always delegating to the latest closures via this ref.
   useEffect(() => {
@@ -617,6 +725,14 @@ export function Game({ mode, onExitToMenu }: Props) {
     setSceneReady(true);
   }
 
+  // Keeps the newest line in view as the log grows — without this, once the
+  // log holds more than a screenful of history, a turn's new events would
+  // stream in below the visible area instead of where the player is looking.
+  useEffect(() => {
+    const el = eventsLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [match.events]);
+
   useEffect(() => {
     sceneRef.current?.syncState({
       pawns: match.pawns,
@@ -632,7 +748,11 @@ export function Game({ mode, onExitToMenu }: Props) {
   });
 
   async function resolveWithPawns(inputPawns: Pawn[]) {
-    setMatch((prev) => ({ ...prev, resolving: true, events: [] }));
+    // The event log used to reset every turn — it now keeps the whole
+    // match's history (scrollable, see game.css), with a plain divider line
+    // marking where each new turn's events start.
+    const historyBeforeTurn = [...match.events, `Turn ${match.turn}`];
+    setMatch((prev) => ({ ...prev, resolving: true, events: historyBeforeTurn }));
 
     // An active "extended setup" period: this turn is pure repositioning,
     // not a live resolveTurn — no kicks/captures/tackles/saves are possible
@@ -692,7 +812,7 @@ export function Game({ mode, onExitToMenu }: Props) {
         pawns: snapshot.pawns,
         ball: { pos: snapshot.ball },
         ballHeight: snapshot.ballHeight,
-        events: revealedEvents,
+        events: [...historyBeforeTurn, ...revealedEvents],
       }));
       await sleep(stillMoving ? 350 : 80);
       prevPawns = snapshot.pawns;
@@ -928,7 +1048,7 @@ export function Game({ mode, onExitToMenu }: Props) {
             <button type="button" className="exit-button hud-menu-btn" onClick={onExitToMenu}>
               ← Menu
             </button>
-            <button type="button" className="exit-button hud-menu-btn" onClick={toggleFullscreen}>
+            <button type="button" className="exit-button fullscreen-toggle-btn" onClick={toggleFullscreen}>
               {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </button>
             <button type="button" className="continue-button" onClick={handleReady} disabled={match.resolving}>
@@ -941,7 +1061,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           <div className="hud-bottom-left">
             <div className="hud-panel events-log-panel">
               <div className="events-log-title">Events</div>
-              <ul className={`events-log ${match.events.length > 0 ? "" : "empty"}`}>
+              <ul ref={eventsLogRef} className={`events-log ${match.events.length > 0 ? "" : "empty"}`}>
                 {match.events.map((e, i) => (
                   <li key={i} className={eventClass(e)}>
                     {e}
