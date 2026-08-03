@@ -32,6 +32,7 @@ import {
   MOVE_RANGE,
   OOB_CELLS,
   PAWN_COLLISION_RADIUS,
+  PAWN_MOVE_BUDGET,
   PAWN_SPEED_PER_TICK,
   PENALTY_SPOT_DEPTH,
   PRESSURE_RADIUS,
@@ -53,14 +54,42 @@ import { attemptsReaction } from "./reactions";
 import type { Ball, Pawn, PlayerDTO, Side, Vec2 } from "./types";
 
 /**
- * How many waypoint-leg "charges" a pawn gets this turn, from their stamina
- * attribute — one charge per PAWN_MOVE_BUDGET-capped leg (see constants.ts).
- * Exported for Game.tsx's click-to-plan UI (gating how many waypoints a
- * player can add and showing the remaining count) as well as resolve.ts's
- * own internal use.
+ * How many separate waypoints a pawn's fixed PAWN_MOVE_BUDGET can be split
+ * into this turn, from their stamina attribute — see constants.ts's own
+ * comment for why this governs subdivision, not total range. Exported for
+ * Game.tsx's click-to-plan UI (gating how many waypoints a player can add
+ * and showing the remaining count) as well as resolve.ts's own internal use.
  */
 export function chargesFor(player: PlayerDTO): number {
   return STAMINA_CHARGES_BASE + Math.floor(player.stamina / STAMINA_PER_BONUS_CHARGE);
+}
+
+/**
+ * Defensive clamp on a pawn's requested waypoint chain: at most `maxLegs`
+ * waypoints (see chargesFor), and the cumulative distance from `from`
+ * through every kept waypoint in order never exceeds `maxTotalDistance` —
+ * the same fixed PAWN_MOVE_BUDGET a single-destination plan always had, not
+ * extended just because it's now split across several legs. Mirrors
+ * startFlight's KICK_RANGE clamp: the UI is expected to already gate this
+ * when building a chain, but resolveTurn shouldn't silently trust an input
+ * that claims more legs or more total distance than the pawn actually has.
+ * Stops at the first waypoint that would break either limit, rather than
+ * partially clamping it — the UI never produces that shape, so simplicity
+ * wins over precision for this fallback.
+ */
+function clampStepsToBudget(from: Vec2, steps: Vec2[], maxLegs: number, maxTotalDistance: number): Vec2[] {
+  const clamped: Vec2[] = [];
+  let cursor = from;
+  let remaining = maxTotalDistance;
+  for (const step of steps) {
+    if (clamped.length >= maxLegs) break;
+    const legDist = distance(cursor, step);
+    if (legDist > remaining) break;
+    clamped.push(step);
+    remaining -= legDist;
+    cursor = step;
+  }
+  return clamped;
 }
 
 export interface ResolveSnapshot {
@@ -800,12 +829,12 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     sliceStart = events.length;
     return slice;
   }
-  // Defensively clamp to each pawn's own charge budget, the same way
-  // startFlight clamps a kick to KICK_RANGE regardless of what was
-  // requested — the UI is expected to already gate this when building a
-  // chain, but resolveTurn shouldn't silently trust an input that claims
-  // more legs than the pawn's stamina actually grants.
-  let current: Pawn[] = pawns.map((p) => ({ ...p, plannedSteps: p.plannedSteps.slice(0, chargesFor(p.player)) }));
+  // Defensively clamp to each pawn's own charge count AND total move budget
+  // — see clampStepsToBudget's own doc comment.
+  let current: Pawn[] = pawns.map((p) => ({
+    ...p,
+    plannedSteps: clampStepsToBudget(p.pos, p.plannedSteps, chargesFor(p.player), PAWN_MOVE_BUDGET),
+  }));
   const snapshots: ResolveSnapshot[] = [];
   // Captured before the tick loop wipes plannedSteps each tick (see the
   // end-of-tick reset below) — a man-marking pawn's auto-movement only kicks

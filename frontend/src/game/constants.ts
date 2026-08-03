@@ -152,23 +152,27 @@ export const REACT_RADIUS = 4.5;
 export const PAWN_SPEED_PER_TICK = 1;
 // Minimum distance kept between any two pawns.
 export const PAWN_COLLISION_RADIUS = 1.4;
-// Total real-distance reach for a single waypoint leg, used wherever planning
-// (human click or AI) decides which destinations are reachable for the NEXT
-// leg — not the whole turn any more, since a turn can now chain several legs
-// (see the stamina/charge constants below and resolve.ts's chargesFor).
+// Total real-distance reach for a pawn's WHOLE turn — unchanged in total
+// amount from before waypoint chains existed. A chain doesn't add extra
+// range; it lets that same fixed budget be split across several shorter
+// legs instead of one straight line to a single destination (see the
+// stamina/charge constants below and resolve.ts's chargesFor/
+// clampStepsToBudget).
 export const PAWN_MOVE_BUDGET = MOVE_RANGE * PAWN_SPEED_PER_TICK;
 
-// A pawn's per-turn "charge" budget (see resolve.ts's chargesFor) — one
-// waypoint leg costs one charge, capped at PAWN_MOVE_BUDGET distance each.
-// Explicitly modeled after Divinity: Original Sin 2's charge system (a
-// handful of charges per turn, each move costs one and covers up to a fixed
-// distance) rather than a continuous fatigue meter — the `stamina` attribute
-// (0-100) scales how many charges a pawn gets, so a fitter player can chain
-// more legs in one turn, not just move faster within a single one.
-// STAMINA_CHARGES_BASE guarantees every pawn keeps at least today's one
-// full-budget move even at 0 stamina. Starting points for playtesting, like
+// A pawn's per-turn "charge" budget (see resolve.ts's chargesFor) — governs
+// how many SEPARATE waypoints the pawn's fixed PAWN_MOVE_BUDGET can be
+// subdivided into, not how far it can travel in total (that stays capped at
+// PAWN_MOVE_BUDGET regardless of charge count). Loosely modeled after
+// Divinity: Original Sin 2's charge system, adapted so charges buy
+// flexibility in HOW a fixed budget is spent rather than extending the
+// budget itself — the `stamina` attribute (0-100) scales how many hops a
+// fitter pawn can plan, without every pawn's total range ballooning past
+// what it always was. STAMINA_CHARGES_BASE = 1 guarantees every pawn can
+// always at least plan a single destination, exactly as before this system
+// existed, regardless of stamina. Starting points for playtesting, like
 // every other tunable here.
-export const STAMINA_CHARGES_BASE = 2;
+export const STAMINA_CHARGES_BASE = 1;
 export const STAMINA_PER_BONUS_CHARGE = 25;
 
 // How close an opponent has to get to a dribbling ball carrier before they

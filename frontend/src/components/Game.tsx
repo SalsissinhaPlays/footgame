@@ -36,6 +36,17 @@ function euclideanDistance(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/** Cumulative distance from `from` through every waypoint in `steps`, in order — how much of a pawn's fixed PAWN_MOVE_BUDGET a chain-so-far has already spent. */
+function totalPlannedDistance(from: Vec2, steps: Vec2[]): number {
+  let total = 0;
+  let cursor = from;
+  for (const step of steps) {
+    total += euclideanDistance(cursor, step);
+    cursor = step;
+  }
+  return total;
+}
+
 function inBounds(pos: Vec2): boolean {
   return (
     pos.x >= -OOB_CELLS &&
@@ -315,22 +326,26 @@ export function Game({ mode, onExitToMenu }: Props) {
   const isCarrier = (pawn: Pawn) => pawn.pos.x === ball.pos.x && pawn.pos.y === ball.pos.y;
   const selectedIsCarrier = !!selectedPawn && isCarrier(selectedPawn);
 
-  // How far (world units) a single waypoint LEG can reach — the radius the
-  // reach-circle overlay draws (from wherever the chain currently ends, see
-  // MatchScene's updateReachHighlight), and the budget a click has to fall
-  // within to register. Both move and kick are plain Euclidean circles now
-  // that targeting is continuous, not tied to grid cells.
+  // A pawn's WHOLE-turn move budget — unchanged in total amount by chaining
+  // waypoints, same as it always was for a single destination. Charges (see
+  // resolve.ts's chargesFor) only gate how many separate legs that SAME
+  // fixed budget can be split into, not how far it reaches in total.
   const moveBudget = selectedPawn?.plannedSprint ? PAWN_MOVE_BUDGET * SPRINT_SPEED_MULTIPLIER : PAWN_MOVE_BUDGET;
-  // Charges gate how many legs a pawn can chain this turn (see resolve.ts's
-  // chargesFor) — kicks don't spend a charge yet (Increment 2's job).
   const totalCharges = selectedPawn ? chargesFor(selectedPawn.player) : 0;
   const chargesUsed = selectedPawn?.plannedSteps.length ?? 0;
   const chargesRemaining = totalCharges - chargesUsed;
+  const distanceUsed = selectedPawn ? totalPlannedDistance(selectedPawn.pos, selectedPawn.plannedSteps) : 0;
+  const distanceRemaining = moveBudget - distanceUsed;
+  // The reach-circle overlay draws at whatever's left of the total budget —
+  // shrinking as more of the chain gets spent — from wherever the chain
+  // currently ends (see MatchScene's updateReachHighlight). Kicks don't
+  // spend a charge yet (Increment 2's job) and always measure from the
+  // pawn's actual position, not a hypothetical chain end.
   const reachRadius = selectedPawn
     ? kickMode && selectedIsCarrier
       ? KICK_RANGE
-      : chargesRemaining > 0
-        ? moveBudget
+      : chargesRemaining > 0 && distanceRemaining > 0
+        ? distanceRemaining
         : null
     : null;
 
@@ -400,7 +415,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
 
     if (chargesRemaining <= 0) return;
-    if (euclideanDistance(origin, point) > moveBudget) return;
+    if (euclideanDistance(origin, point) > distanceRemaining) return;
 
     setPawns((prev) =>
       prev.map((p) =>
