@@ -476,7 +476,16 @@ export function Game({ mode, onExitToMenu }: Props) {
         ...prev,
         pawns: prev.pawns.map((p) =>
           p.id === selectedPawn.id
-            ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point, kick: { loft, kind: kickKind } }] }
+            ? {
+                ...p,
+                // At most one kick per turn's plan — a pawn wouldn't have
+                // the ball for a second one anyway. Setting a new kick
+                // (a different type, or the same type aimed elsewhere)
+                // means the player is reconsidering, not adding a second
+                // kick action, so it replaces whichever kick was already
+                // queued instead of stacking a second one.
+                plannedSteps: [...p.plannedSteps.filter((s) => !s.kick), { pos: point, kick: { loft, kind: kickKind } }],
+              }
             : p
         ),
       }));
@@ -506,33 +515,55 @@ export function Game({ mode, onExitToMenu }: Props) {
       return;
     }
 
-    if (chargesRemaining <= 0) return;
-    if (euclideanDistance(chainEnd, point) > distanceRemaining) return;
+    if (chargesRemaining <= 0 || distanceRemaining <= 0) return;
+    // A click beyond the reachable distance still plans a waypoint — just
+    // clamped to the edge of what's actually reachable, in the direction
+    // clicked, rather than silently doing nothing.
+    const clickDistance = euclideanDistance(chainEnd, point);
+    const target =
+      clickDistance > distanceRemaining
+        ? {
+            x: chainEnd.x + ((point.x - chainEnd.x) * distanceRemaining) / clickDistance,
+            y: chainEnd.y + ((point.y - chainEnd.y) * distanceRemaining) / clickDistance,
+          }
+        : point;
 
     setMatch((prev) => ({
       ...prev,
-      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: [...p.plannedSteps, { pos: point }] } : p)),
+      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: [...p.plannedSteps, { pos: target }] } : p)),
     }));
     // Deliberately stays selected — the pawn keeps taking clicks to extend
     // its chain until the player selects someone/something else.
   }
 
   /**
-   * Right-click on the pitch always undoes the selected pawn's last planned
-   * step — a reliable, position-independent alternative to clicking back
-   * near the chain's current end (handleFieldClick's CANCEL_CLICK_EPS
-   * check), which still requires some precision. Also suppresses the
-   * browser's native right-click context menu on the canvas, which
-   * otherwise pops up and blocks the view — nothing in this game uses right
-   * click for anything else.
+   * Right-click on the pitch undoes the selected pawn's last planned step
+   * when it has one — a reliable, position-independent alternative to
+   * clicking back near the chain's current end (handleFieldClick's
+   * CANCEL_CLICK_EPS check), which still requires some precision. Once
+   * there's nothing left to undo, right-click instead deselects the pawn
+   * entirely — a quick way out of planning without needing to re-find and
+   * click the same pawn again. Also suppresses the browser's native
+   * right-click context menu on the canvas, which otherwise pops up and
+   * blocks the view — nothing in this game uses right click for anything
+   * else.
    */
   function handleViewportContextMenu(e: ReactMouseEvent) {
     e.preventDefault();
-    if (match.resolving || !selectedPawn || selectedPawn.plannedSteps.length === 0) return;
-    setMatch((prev) => ({
-      ...prev,
-      pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p)),
-    }));
+    if (match.resolving || !selectedPawn) return;
+    if (selectedPawn.plannedSteps.length > 0) {
+      setMatch((prev) => ({
+        ...prev,
+        pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSteps: p.plannedSteps.slice(0, -1) } : p)),
+      }));
+      return;
+    }
+    setSelectedId(null);
+    setKickMode(false);
+    setKickLoft(false);
+    setKickKind("pass");
+    setPickingMarkTarget(false);
+    setStanceMenuOpen(false);
   }
 
   /** Sets (or clears, with `null`) the selected pawn's stance for this turn. */

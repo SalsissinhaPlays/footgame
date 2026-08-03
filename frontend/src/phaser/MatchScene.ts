@@ -437,7 +437,7 @@ export class MatchScene extends Phaser.Scene {
     const g = this.cellsGfx;
     g.clear();
     if (!this.state) return;
-    const { reachRadius, kickMode, pawns, selectedId } = this.state;
+    const { reachRadius, kickMode, kickKind, pawns, selectedId } = this.state;
     if (reachRadius === null || !selectedId) return;
     const selectedPawn = pawns.find((pw) => pw.id === selectedId);
     if (!selectedPawn) return;
@@ -460,13 +460,19 @@ export class MatchScene extends Phaser.Scene {
       return;
     }
 
-    // Deliberately no blanket tint over the whole reach circle here anymore
-    // (an earlier version filled it orange edge-to-edge) — with the live
-    // "mortar aim" ring (updateOverlay) already showing real accuracy right
-    // at the cursor, a second, much bigger orange dome covering the entire
-    // reachable area was pure visual noise on top of it, per an explicit
-    // user call. The goal tint and teammate halo below stay: unlike the
-    // blanket fill, they mark specific, useful sub-regions.
+    // Shot/pass have no live per-cursor accuracy preview (only cross does —
+    // see updateOverlay's live "mortar aim" block below), so they still need
+    // this blanket tint to show how far a kick can actually reach. Cross
+    // skips it: the live ring already communicates real accuracy right at
+    // the cursor, and a second, much bigger dome underneath it was pure
+    // visual noise, per an explicit user call.
+    if (kickKind !== "cross") {
+      g.fillStyle(0xff8c00, 0.22);
+      fillPoly(g, reachPts);
+      g.lineStyle(1.5, 0xffa028, 0.9);
+      strokePoly(g, reachPts, true);
+    }
+
     const goalLineX = selectedPawn.side === "home" ? GRID_COLS : 0;
     const goalYTop = GOAL_ROW_MIN;
     const goalYBottom = GOAL_ROW_MAX + 1;
