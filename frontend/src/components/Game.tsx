@@ -535,13 +535,28 @@ export function Game({ mode, onExitToMenu }: Props) {
     if (!inBounds(point)) return;
 
     if (kickMode) {
-      if (reachRadius === null || euclideanDistance(chainEnd, point) > reachRadius) {
-        // Nothing left to spend on a kick either — a field click can't do
-        // anything useful anymore, so treat it as "I'm done with this pawn"
-        // instead of a silent no-op that leaves it stuck selected.
+      if (reachRadius === null) {
+        // Not even one charge left to spend on a kick — a field click can't
+        // do anything useful anymore, so treat it as "I'm done with this
+        // pawn" instead of a silent no-op that leaves it stuck selected.
         if (chargesRemaining <= 0) deselectPawn();
         return;
       }
+      // A click beyond the kick's actual reach still aims it — just clamped
+      // to the edge of that reach, in the direction clicked, matching the
+      // exact same "clamp instead of ignore" treatment a move click beyond
+      // distanceRemaining already gets below. The live aim-ring preview
+      // (MatchScene's updateOverlay) already visually clamps to this same
+      // edge, so this just makes clicking there actually register instead
+      // of silently doing nothing.
+      const kickClickDistance = euclideanDistance(chainEnd, point);
+      const aimPoint =
+        kickClickDistance > reachRadius
+          ? {
+              x: chainEnd.x + ((point.x - chainEnd.x) * reachRadius) / kickClickDistance,
+              y: chainEnd.y + ((point.y - chainEnd.y) * reachRadius) / kickClickDistance,
+            }
+          : point;
       // A cross is airborne by definition — always lofted regardless of the
       // Ground/Loft toggle (which stays a real choice for shot/pass). Also
       // enforced defensively in resolve.ts's startFlight, so this isn't the
@@ -559,7 +574,7 @@ export function Game({ mode, onExitToMenu }: Props) {
                 // means the player is reconsidering, not adding a second
                 // kick action, so it replaces whichever kick was already
                 // queued instead of stacking a second one.
-                plannedSteps: [...p.plannedSteps.filter((s) => !s.kick), { pos: point, kick: { loft, kind: kickKind } }],
+                plannedSteps: [...p.plannedSteps.filter((s) => !s.kick), { pos: aimPoint, kick: { loft, kind: kickKind } }],
               }
             : p
         ),
