@@ -51,6 +51,23 @@ export const CAPTURE_RADIUS = 1.2;
 // takeover.
 export const DECISIVE_CONTEST_MARGIN = 15;
 
+// Foul risk on a decisively lost tackle (see resolve.ts's tackle-challenge
+// branch) — chance ramps from FOUL_CHANCE_AT_THRESHOLD right at
+// DECISIVE_CONTEST_MARGIN up to FOUL_CHANCE_MAX as the loss gets more
+// lopsided, over FOUL_CHANCE_MARGIN_RANGE. Aggressive stance adds a flat
+// bonus on top — a real trade-off for its existing tackle-contest bonus,
+// not a pure upside.
+export const FOUL_CHANCE_AT_THRESHOLD = 0.12;
+export const FOUL_CHANCE_MAX = 0.35;
+export const FOUL_CHANCE_MARGIN_RANGE = 30;
+export const FOUL_AGGRESSIVE_BONUS = 0.08;
+
+// Fixed penalty-spot depth off the goal line (inside GK_PENALTY_DEPTH's
+// 2.6-unit box) — real football's spot sits roughly 2/3 of the way through
+// the box from the line; same proportion here, a starting point for
+// playtesting like the rest of the GK tuning constants.
+export const PENALTY_SPOT_DEPTH = 2.0;
+
 // Loft (airborne kick) height, in the same meter-scale world units as
 // everything else. A lofted flight's height follows a simple parabola
 // (0 at kickoff, apex at the midpoint, back to 0 on landing) — see

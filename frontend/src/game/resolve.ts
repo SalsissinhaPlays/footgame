@@ -5,6 +5,10 @@ import {
   DECISIVE_CONTEST_MARGIN,
   DEFLECTION_ANGLE_SPREAD,
   DEFLECTION_SPEED,
+  FOUL_AGGRESSIVE_BONUS,
+  FOUL_CHANCE_AT_THRESHOLD,
+  FOUL_CHANCE_MARGIN_RANGE,
+  FOUL_CHANCE_MAX,
   GK_AGGRESSIVE_THREAT_RANGE,
   GK_ANCHOR_DEPTH,
   GK_CLAIM_RADIUS,
@@ -29,6 +33,7 @@ import {
   OOB_CELLS,
   PAWN_COLLISION_RADIUS,
   PAWN_SPEED_PER_TICK,
+  PENALTY_SPOT_DEPTH,
   PRESSURE_RADIUS,
   PRESSURE_SLOW_FACTOR,
   REACT_RADIUS,
@@ -63,7 +68,7 @@ export interface ResolveResult {
 }
 
 export interface DeadBallResult {
-  type: "throw_in" | "corner" | "goal_kick";
+  type: "throw_in" | "corner" | "goal_kick" | "free_kick" | "penalty";
   /** Side AWARDED the restart. */
   side: Side;
   /** Where the ball is placed — and where the nearest eligible pawn of `side` snaps to (see Game.tsx). */
@@ -220,6 +225,21 @@ function inGkZone(pos: Vec2, side: Side, depth: number, pad: number): boolean {
 
 function withinPenaltyBox(pos: Vec2, side: Side): boolean {
   return inGkZone(pos, side, GK_PENALTY_DEPTH, GK_PENALTY_PAD);
+}
+
+/**
+ * A foul by `challenger` against ball-carrying `holder` — awarded to
+ * `holder.side`. A foul committed inside the CHALLENGER's own box is a
+ * penalty (fixed spot, no wall/setup concept); anywhere else it's a direct
+ * free kick taken from the exact spot of the foul.
+ */
+function classifyFoul(holder: Pawn, challenger: Pawn): DeadBallResult {
+  if (withinPenaltyBox(holder.pos, challenger.side)) {
+    const y = Math.floor((GOAL_ROW_MIN + GOAL_ROW_MAX) / 2);
+    const x = challenger.side === "home" ? PENALTY_SPOT_DEPTH : GRID_COLS - PENALTY_SPOT_DEPTH;
+    return { type: "penalty", side: holder.side, spot: { x, y } };
+  }
+  return { type: "free_kick", side: holder.side, spot: { ...holder.pos } };
 }
 
 // The ball is never allowed to end a tick's movement beyond the walkable
@@ -1311,6 +1331,35 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
             ballPos = { ...holder.pos };
             events.push(`${challenger.player.name} half-tackles ${holder.player.name} — loose ball!`);
           } else {
+            // Challenger lost — margin is holder's advantage, i.e. how badly
+            // the tackle attempt went. Only a genuinely bad miss risks a
+            // foul; a narrow, competent-but-unsuccessful challenge never
+            // does. Aggressive stance nudges the chance up on top of its
+            // existing tackle-contest bonus — a real risk/reward trade-off,
+            // not a pure upside.
+            if (margin >= DECISIVE_CONTEST_MARGIN) {
+              let foulChance =
+                FOUL_CHANCE_AT_THRESHOLD +
+                (FOUL_CHANCE_MAX - FOUL_CHANCE_AT_THRESHOLD) *
+                  Math.min(1, (margin - DECISIVE_CONTEST_MARGIN) / FOUL_CHANCE_MARGIN_RANGE);
+              if (challenger.stance?.kind === "aggressive") foulChance += FOUL_AGGRESSIVE_BONUS;
+              if (Math.random() < foulChance) {
+                const deadBall = classifyFoul(holder, challenger);
+                const sideName = deadBall.side === "home" ? "the home side" : "the away side";
+                events.push(
+                  deadBall.type === "penalty"
+                    ? `Foul! ${challenger.player.name} brings down ${holder.player.name} in the box — penalty to ${sideName}!`
+                    : `Foul! ${challenger.player.name} brings down ${holder.player.name} — free kick to ${sideName}`
+                );
+                snapshots.push({
+                  pawns: current.map((p) => ({ ...p })),
+                  ball: { ...holder.pos },
+                  ballHeight,
+                  events: takeNewEvents(),
+                });
+                return { snapshots, goal: null, deadBall };
+              }
+            }
             tackleAttempted.add(challenger.id);
           }
         }

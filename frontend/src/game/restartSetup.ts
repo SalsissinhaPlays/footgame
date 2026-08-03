@@ -14,6 +14,12 @@ export const SETUP_TURNS_BY_TYPE: Record<DeadBallResult["type"], number> = {
   throw_in: 1,
   corner: 2,
   goal_kick: 1,
+  free_kick: 3,
+  // Never actually read — a penalty skips the quick-vs-extended-setup
+  // prompt entirely (see Game.tsx), so restartSetup never gets constructed
+  // for one. Kept only so this map stays exhaustive over DeadBallResult's
+  // full type union.
+  penalty: 0,
 };
 
 /**

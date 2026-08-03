@@ -93,6 +93,8 @@ const RESTART_TYPE_LABEL: Record<DeadBallResult["type"], string> = {
   throw_in: "Throw-in",
   corner: "Corner",
   goal_kick: "Goal kick",
+  free_kick: "Free kick",
+  penalty: "Penalty",
 };
 
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
@@ -538,11 +540,14 @@ export function Game({ mode, onExitToMenu }: Props) {
 
       // Only the restarting side gets a say in quick-vs-extended — no human
       // to ask when it falls to an AI-controlled or never-planned (solo away)
-      // side, so those always take it quickly, matching today's behavior.
+      // side, so those always take it quickly, matching today's behavior. A
+      // penalty never gets the prompt at all, regardless of side/mode — a
+      // 1-on-1 penalty has no "organize a wall" concept to opt into.
       const humanControlsRestart =
-        mode === "hotseat" ||
-        (mode === "ai" && deadBall.side === "home") ||
-        (mode === "solo" && deadBall.side === "home");
+        deadBall.type !== "penalty" &&
+        (mode === "hotseat" ||
+          (mode === "ai" && deadBall.side === "home") ||
+          (mode === "solo" && deadBall.side === "home"));
       if (humanControlsRestart) setPendingRestart(deadBall);
     }
 
