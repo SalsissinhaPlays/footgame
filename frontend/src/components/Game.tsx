@@ -20,7 +20,7 @@ import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } fro
 import { chargesFor, resolveTurn } from "../game/resolve";
 import type { DeadBallResult } from "../game/resolve";
 import { resolveSetupTurn, SETUP_TURNS_BY_TYPE } from "../game/restartSetup";
-import type { Ball, Pawn, PlannedStep, Stance, TeamDTO, Vec2 } from "../game/types";
+import type { Ball, Pawn, PlannedStep, PlayerDTO, Side, Stance, TeamDTO, Vec2 } from "../game/types";
 import type { MatchCallbacks } from "../phaser/MatchScene";
 import { MatchScene } from "../phaser/MatchScene";
 import { PhaserGame } from "../phaser/PhaserGame";
@@ -277,6 +277,17 @@ export function Game({ mode, onExitToMenu }: Props) {
   // Clean/Hard sub-choice revealed while open. Toggling it off (or picking
   // the already-active kind again) clears the declaration.
   const [tackleMode, setTackleMode] = useState(false);
+  // Solo mode's sandbox tool — the first version of the future Team
+  // Management window (see CLAUDE.md). All session-only, local UI state;
+  // nothing here is persisted to the backend.
+  const [teamManagementOpen, setTeamManagementOpen] = useState(false);
+  const [awayAiEnabled, setAwayAiEnabled] = useState(false);
+  // Set by "+ Add Player"; consumed by the next field click, which places
+  // the new pawn there instead of doing anything else (see handleFieldClick).
+  const [placingPawnSide, setPlacingPawnSide] = useState<Side | null>(null);
+  // Starts well above any real backend player id so a synthetic PlayerDTO
+  // can never collide with one fetched from the database.
+  const nextCustomPlayerId = useRef(100000);
   const [stanceMenuOpen, setStanceMenuOpen] = useState(false);
   // True while the player has picked "Man-mark" for the selected pawn and
   // is now expected to click an opponent pawn instead of a cell/destination.
@@ -510,6 +521,14 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   function handlePawnClick(pawn: Pawn) {
     if (match.resolving) return;
+    // Placing a new pawn exactly where an existing one stands is legitimate
+    // (testing a crowded box, a deliberate overlap) — same reasoning as the
+    // kick-mode redirect below: without this, clicking an existing pawn
+    // would just select/deselect it instead of placing the new one there.
+    if (placingPawnSide) {
+      handleFieldClick(pawn.pos);
+      return;
+    }
     if (pickingMarkTarget && selectedPawn && pawn.side !== match.controllingSide) {
       setMatch((prev) => ({
         ...prev,
@@ -543,6 +562,46 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   function handleFieldClick(point: Vec2) {
     if (match.resolving) return;
+    if (placingPawnSide) {
+      if (!inBounds(point)) return;
+      const side = placingPawnSide;
+      const maxJersey = match.pawns
+        .filter((p) => p.side === side)
+        .reduce((max, p) => Math.max(max, p.player.jersey_number), 0);
+      const id = nextCustomPlayerId.current++;
+      // Generic mid-range defaults — the whole point of this tool is to
+      // immediately tweak them via the Team Management panel's edit fields.
+      const newPlayer: PlayerDTO = {
+        id,
+        team_id: (side === "home" ? teams[0]?.id : teams[1]?.id) ?? 0,
+        name: "New Player",
+        position: "MID",
+        jersey_number: maxJersey + 1,
+        pace: 50,
+        stamina: 50,
+        skill: 50,
+        jumping: 50,
+        shot_stopping: 50,
+        reflexes: 50,
+        heading: 50,
+      };
+      const newPawn: Pawn = {
+        id: `custom-${id}`,
+        player: newPlayer,
+        side,
+        pos: point,
+        plannedSteps: [],
+        stance: null,
+        plannedSprint: false,
+        sprintCooldown: 0,
+        plannedTackle: null,
+        tackleCooldown: 0,
+      };
+      setMatch((prev) => ({ ...prev, pawns: [...prev.pawns, newPawn] }));
+      setSelectedId(newPawn.id);
+      setPlacingPawnSide(null);
+      return;
+    }
     if (!selectedPawn || !chainEnd) return;
     if (!inBounds(point)) return;
 
@@ -658,6 +717,7 @@ export function Game({ mode, onExitToMenu }: Props) {
    * queued steps.
    */
   function deselectPawn() {
+    setPlacingPawnSide(null);
     if (match.resolving || !selectedPawn) return;
     setSelectedId(null);
     setKickMode(false);
@@ -746,6 +806,42 @@ export function Game({ mode, onExitToMenu }: Props) {
       ),
     }));
     setTackleMode(false);
+  }
+
+  /**
+   * Selects a pawn from the Team Management roster list, bypassing
+   * handlePawnClick's `pawn.side !== match.controllingSide` gate — unlike
+   * normal play, this sandbox lets you select (and therefore edit, or even
+   * manually plan a move for) either side's pawns, not just the turn's
+   * controlling side. AI, when enabled, still overwrites away's plan
+   * wholesale at Continue time regardless of anything planned here by hand.
+   */
+  function handleSelectFromRoster(pawn: Pawn) {
+    setKickMode(false);
+    setKickLoft(false);
+    setKickKind("pass");
+    setTackleMode(false);
+    setPickingMarkTarget(false);
+    setStanceMenuOpen(false);
+    setSelectedId((current) => (current === pawn.id ? null : pawn.id));
+  }
+
+  /** Arms placement mode for a new pawn on `side` — the next field click (see handleFieldClick) actually creates and places it. */
+  function handleAddPlayer(side: Side) {
+    setPlacingPawnSide(side);
+  }
+
+  function handleDeletePlayer(pawnId: string) {
+    setMatch((prev) => ({ ...prev, pawns: prev.pawns.filter((p) => p.id !== pawnId) }));
+    setSelectedId((current) => (current === pawnId ? null : current));
+  }
+
+  /** Edits one attribute/field on a pawn's underlying PlayerDTO — always an immutable spread, never mutating the fetched object in place. */
+  function handleEditPlayerField<K extends keyof PlayerDTO>(pawnId: string, field: K, value: PlayerDTO[K]) {
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === pawnId ? { ...p, player: { ...p.player, [field]: value } } : p)),
+    }));
   }
 
   // Same stale-closure fix as handlersRef just below, for the mount-once
@@ -910,7 +1006,11 @@ export function Game({ mode, onExitToMenu }: Props) {
       await sleep(600);
       setMatch((prev) => ({
         ...prev,
-        pawns: kickoffFormation(prev.pawns),
+        // The Team Management sandbox's custom roster (extra/edited/moved
+        // pawns) would otherwise be silently wiped by the standard 6-pawn
+        // kickoff reset the instant anyone scores — skip it here and just
+        // recenter the ball, leaving the roster exactly as the player built it.
+        pawns: mode === "solo" ? prev.pawns : kickoffFormation(prev.pawns),
         ball: { pos: BALL_START },
         ballHeight: 0,
       }));
@@ -976,6 +1076,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setKickKind("pass");
     setTackleMode(false);
     setPickingMarkTarget(false);
+    setPlacingPawnSide(null);
 
     if (mode === "ai") {
       const withAiMoves = planAiTurn(match.pawns, match.ball, "away");
@@ -984,8 +1085,12 @@ export function Game({ mode, onExitToMenu }: Props) {
     }
 
     if (mode === "solo") {
-      // No opponent to plan for — the away side just never gets a plannedSteps chain.
-      await resolveWithPawns(match.pawns);
+      // The Team Management sandbox's AI toggle — off by default (matching
+      // solo's original "away never gets a plan" meaning), on demand when
+      // the player wants to see how their custom roster actually plays
+      // against the AI instead of just standing still.
+      const pawnsForTurn = awayAiEnabled ? planAiTurn(match.pawns, match.ball, "away") : match.pawns;
+      await resolveWithPawns(pawnsForTurn);
       return;
     }
 
@@ -1124,11 +1229,129 @@ export function Game({ mode, onExitToMenu }: Props) {
             <button type="button" className="exit-button fullscreen-toggle-btn" onClick={toggleFullscreen}>
               {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </button>
+            {mode === "solo" && (
+              <button
+                type="button"
+                className={`exit-button ${teamManagementOpen ? "active" : ""}`}
+                onClick={() => setTeamManagementOpen((o) => !o)}
+              >
+                Team Management
+              </button>
+            )}
             <button type="button" className="continue-button" onClick={handleReady} disabled={match.resolving}>
               {match.resolving ? "Resolving..." : mode === "hotseat" ? "Ready" : "Continue"}
             </button>
           </div>
         </div>
+
+        {mode === "solo" && teamManagementOpen && (
+          <div className="hud-middle-row">
+            <div className="hud-panel team-management-panel">
+              <div className="team-management-header">Team Management (testing)</div>
+              {placingPawnSide && (
+                <div className="hud-banner">Click the pitch to place the new player.</div>
+              )}
+              <div className="team-management-columns">
+                {(["home", "away"] as const).map((side) => {
+                  const roster = match.pawns.filter((p) => p.side === side);
+                  const sideName = side === "home" ? teams[0]?.name : teams[1]?.name;
+                  return (
+                    <div className="team-management-column" key={side}>
+                      <div className="team-management-column-header">
+                        <span>{sideName}</span>
+                        {side === "away" && (
+                          <label className="ai-toggle">
+                            <input
+                              type="checkbox"
+                              checked={awayAiEnabled}
+                              onChange={(e) => setAwayAiEnabled(e.target.checked)}
+                            />
+                            AI
+                          </label>
+                        )}
+                      </div>
+                      <ul className="roster-list">
+                        {roster.map((p) => (
+                          <li key={p.id} className={p.id === selectedId ? "active" : ""}>
+                            <button type="button" onClick={() => handleSelectFromRoster(p)}>
+                              #{p.player.jersey_number} {p.player.name} ({p.player.position})
+                            </button>
+                            <button
+                              type="button"
+                              className="roster-delete"
+                              onClick={() => handleDeletePlayer(p.id)}
+                              title="Delete player"
+                            >
+                              ✕
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        className="team-management-add-btn"
+                        onClick={() => handleAddPlayer(side)}
+                        disabled={placingPawnSide !== null}
+                      >
+                        + Add Player
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {selectedPawn && (
+                <div className="team-management-edit">
+                  <div className="team-management-edit-header">Edit: {selectedPawn.player.name}</div>
+                  <label>
+                    Name
+                    <input
+                      type="text"
+                      value={selectedPawn.player.name}
+                      onChange={(e) => handleEditPlayerField(selectedPawn.id, "name", e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Jersey #
+                    <input
+                      type="number"
+                      value={selectedPawn.player.jersey_number}
+                      onChange={(e) =>
+                        handleEditPlayerField(selectedPawn.id, "jersey_number", Number(e.target.value))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Position
+                    <select
+                      value={selectedPawn.player.position}
+                      onChange={(e) => handleEditPlayerField(selectedPawn.id, "position", e.target.value)}
+                    >
+                      <option value="GK">GK</option>
+                      <option value="DEF">DEF</option>
+                      <option value="MID">MID</option>
+                      <option value="FWD">FWD</option>
+                    </select>
+                  </label>
+                  {(
+                    ["pace", "stamina", "skill", "jumping", "shot_stopping", "reflexes", "heading"] as const
+                  ).map((attr) => (
+                    <label key={attr}>
+                      {attr.replace("_", " ")}
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={selectedPawn.player[attr]}
+                        onChange={(e) => handleEditPlayerField(selectedPawn.id, attr, Number(e.target.value))}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="hud-bottom-row">
           <div className="hud-bottom-left">

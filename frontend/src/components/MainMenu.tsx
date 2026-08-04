@@ -21,8 +21,8 @@ export function MainMenu({ onStartHotseat, onStartAi, onStartSolo }: Props) {
           <span className="menu-button-desc">You control the home team against a computer-controlled opponent</span>
         </button>
         <button type="button" className="menu-button" onClick={onStartSolo}>
-          Solo mode (testing)
-          <span className="menu-button-desc">Just you playing — the opposing team stays put, for testing the mechanics without interference</span>
+          Team Management (testing)
+          <span className="menu-button-desc">Create, place, delete, and edit players — build custom rosters and test matches. The foundation of the future Team Management tool.</span>
         </button>
       </div>
     </div>
