@@ -13,6 +13,7 @@ import {
   LOFT_APEX_HEIGHT_RATIO,
   LOFT_APEX_MAX,
   LOFT_APEX_MIN,
+  OOB_CELLS,
   PRESSURE_RADIUS,
   TACKLE_RADIUS,
 } from "../game/constants";
@@ -42,11 +43,17 @@ export interface MatchSyncState {
   controllingSide: Side;
   /** focusX/focusY are the world (grid) point the camera looks at — re-projected through the current rotation/tilt every time either changes, which is what keeps that point centered through a rotate/tilt instead of the view swinging back toward the pitch's fixed center. */
   camera: { zoom: number; rotation: number; tilt: number; focusX: number; focusY: number };
+  /** Team Management sandbox only (Game.tsx sets this to `mode === "solo" && !placingPawnSide`) — lets an existing pawn be picked up and dropped anywhere, bypassing the normal click-to-plan flow entirely. Never true in a real match. */
+  pawnDragEnabled: boolean;
 }
 
 export interface MatchCallbacks {
   onPawnClick: (pawnId: string) => void;
   onFieldClick: (point: Vec2) => void;
+  /** Fired synchronously on a pawn's own pointerdown, before Game.tsx's own mousedown handler runs (see the ordering note on MatchScene's pointerdown handlers) — lets Game.tsx suppress starting a camera pan-drag for this same gesture. */
+  onPawnPointerDown: (pawnId: string) => void;
+  /** Fired once, on a valid drop (see MatchScene's own bounds-check, which owns rejecting an out-of-bounds drop and snapping the sprite back — Game.tsx only ever hears about accepted drops). */
+  onPawnDragEnd: (pawnId: string, point: Vec2) => void;
 }
 
 // How far into the pitch the reach-highlight's "shot zone" tint extends from
@@ -142,6 +149,13 @@ export class MatchScene extends Phaser.Scene {
   // click this way is what lets a left-click-drag pan the camera instead of
   // planting a waypoint/kick at wherever the drag started.
   private pendingClick: { type: "pawn"; id: string } | { type: "field"; point: Vec2 } | null = null;
+  // Team Management sandbox only: which pawn a left-button pointerdown
+  // landed on, IF pawnDragEnabled — separate from pendingClick because a
+  // drag and a click are mutually exclusive outcomes of the same gesture,
+  // decided at pointerup by whether CLICK_DRAG_THRESHOLD was exceeded. Never
+  // set outside sandbox mode (see the pawnDragEnabled check where this is
+  // assigned), so normal play is completely unaffected.
+  private dragCandidateId: string | null = null;
   private lastRotation: number | null = null;
   private lastTilt: number | null = null;
   // Scale needed to fit the fixed-size isometric world into the actual
@@ -225,6 +239,20 @@ export class MatchScene extends Phaser.Scene {
       this.updateOverlay();
     });
 
+    // Team Management sandbox only: live-follows the cursor with whichever
+    // pawn's pointerdown armed dragCandidateId, entirely within Phaser —
+    // no React round-trip per move, same reasoning as the kick-aim preview
+    // above updating hoverPoint/updateOverlay directly. Deliberately never
+    // touches visual.lastGridPos (see applyPawnPosition) — only the actual
+    // drop, below, updates that, so a rejected/incomplete drag can't leave
+    // the next syncState animating a spurious jump.
+    this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (!this.dragCandidateId || !pointer.leftButtonDown()) return;
+      if (pointer.getDistance() <= CLICK_DRAG_THRESHOLD) return;
+      const visual = this.pawnVisuals.get(this.dragCandidateId);
+      visual?.container.setPosition(pointer.worldX, pointer.worldY);
+    });
+
     // Fires whatever pawn/field click was pending, but only if the pointer
     // never moved more than CLICK_DRAG_THRESHOLD since its pointerdown — a
     // genuine left-click-drag pan (Game.tsx's own mouse handlers) always
@@ -233,6 +261,28 @@ export class MatchScene extends Phaser.Scene {
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
       const pending = this.pendingClick;
       this.pendingClick = null;
+      const dragId = this.dragCandidateId;
+      this.dragCandidateId = null;
+
+      if (dragId && pointer.getDistance() > CLICK_DRAG_THRESHOLD) {
+        // A genuine drag, not a click — never falls through to the
+        // click-firing logic below regardless of what pendingClick holds.
+        const visual = this.pawnVisuals.get(dragId);
+        if (!visual) return;
+        const point = this.projector.fromIso(pointer.worldX, pointer.worldY);
+        if (this.isInBounds(point)) {
+          visual.lastGridPos = { ...point };
+          this.callbacks?.onPawnDragEnd(dragId, point);
+        } else {
+          // Rejected drop — nothing in Game.tsx's state changes, so nothing
+          // else will ever tell this sprite to snap back; MatchScene has to
+          // own that itself.
+          const back = this.projector.toIso(visual.lastGridPos.x + 0.5, visual.lastGridPos.y + 0.5);
+          visual.container.setPosition(back.x, back.y);
+        }
+        return;
+      }
+
       if (!pending || pointer.getDistance() > CLICK_DRAG_THRESHOLD) return;
       if (pending.type === "pawn") this.callbacks?.onPawnClick(pending.id);
       else this.callbacks?.onFieldClick(pending.point);
@@ -250,6 +300,13 @@ export class MatchScene extends Phaser.Scene {
 
   setCallbacks(callbacks: MatchCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  /** Same shape as Game.tsx's own inBounds — duplicated deliberately (see the pointerup drag-drop handling above) since a rejected drag has no other path back to fix a stray out-of-bounds sprite. */
+  private isInBounds(pos: Vec2): boolean {
+    return (
+      pos.x >= -OOB_CELLS && pos.x < GRID_COLS + OOB_CELLS && pos.y >= -OOB_CELLS && pos.y < GRID_ROWS + OOB_CELLS
+    );
   }
 
   /** Keeps the fixed-size isometric world fitted and centered as the real canvas size changes. */
@@ -672,6 +729,14 @@ export class MatchScene extends Phaser.Scene {
     container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (!pointer.leftButtonDown()) return;
       this.pendingClick = { type: "pawn", id: pawn.id };
+      // Team Management sandbox only. Firing this callback synchronously,
+      // right here, is what lets Game.tsx's own mousedown handler (which
+      // runs afterward — see this file's pointerdown/pointerup comments on
+      // why) know to skip starting a camera pan-drag for this same gesture.
+      if (this.state?.pawnDragEnabled) {
+        this.dragCandidateId = pawn.id;
+        this.callbacks?.onPawnPointerDown(pawn.id);
+      }
     });
 
     return { container, sprite, badgeBg, badgeText, lastGridPos: { ...pawn.pos } };

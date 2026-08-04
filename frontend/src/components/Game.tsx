@@ -204,7 +204,12 @@ const ROTATE_KEY_SPEED = 90;
 export function Game({ mode, onExitToMenu }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<MatchScene | null>(null);
-  const handlersRef = useRef<MatchCallbacks>({ onPawnClick: () => {}, onFieldClick: () => {} });
+  const handlersRef = useRef<MatchCallbacks>({
+    onPawnClick: () => {},
+    onFieldClick: () => {},
+    onPawnPointerDown: () => {},
+    onPawnDragEnd: () => {},
+  });
   const rotateState = useRef<{
     active: boolean;
     startX: number;
@@ -229,6 +234,14 @@ export function Game({ mode, onExitToMenu }: Props) {
     startFocusX: number;
     startFocusY: number;
   }>({ active: false, startX: 0, startY: 0, startFocusX: 0, startFocusY: 0 });
+  // Team Management sandbox only — set synchronously by MatchScene's
+  // onPawnPointerDown callback, which (per the event-ordering this whole
+  // click/drag system already relies on) fires before this component's own
+  // mousedown handler below runs, so that handler can tell "this gesture
+  // started on a pawn" and skip starting a camera pan for it. MatchScene
+  // owns the actual drag visuals/drop entirely on its own; this ref exists
+  // purely to keep the two systems from fighting over the same gesture.
+  const draggingPawnRef = useRef<string | null>(null);
   // Escape needs to fire an action defined further down (deselectPawn, which
   // closes over match/selectedPawn) from a keydown listener that's only ever
   // attached once (mount-only effect, empty deps) — same
@@ -406,6 +419,11 @@ export function Game({ mode, onExitToMenu }: Props) {
     // never traveled past CLICK_DRAG_THRESHOLD, so starting a pan-drag here
     // unconditionally on every left mousedown never steals an actual click.
     if (e.button === 0) {
+      // Team Management sandbox only: this same mousedown already told
+      // MatchScene "start dragging this pawn" (see draggingPawnRef's own
+      // comment for the event-ordering this depends on) — hand the whole
+      // gesture to that drag instead of also panning the camera under it.
+      if (draggingPawnRef.current) return;
       e.preventDefault();
       panState.current = {
         active: true,
@@ -463,6 +481,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   function stopRotating() {
     rotateState.current.active = false;
     panState.current.active = false;
+    draggingPawnRef.current = null;
   }
 
   function resetCamera() {
@@ -844,6 +863,21 @@ export function Game({ mode, onExitToMenu }: Props) {
     }));
   }
 
+  /**
+   * Commits a Team Management drag-drop — MatchScene has already done its
+   * own bounds check (see its pointerup handler) by the time this fires, so
+   * `point` here is always valid; this only ever hears about accepted
+   * drops. Clears plannedSteps since a queued waypoint chain computed from
+   * the pawn's old position doesn't mean anything once it's been teleported
+   * — nothing else about the pawn (stance, tackle state, ...) changes.
+   */
+  function handlePawnDragEnd(pawnId: string, point: Vec2) {
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === pawnId ? { ...p, pos: point, plannedSteps: [] } : p)),
+    }));
+  }
+
   // Same stale-closure fix as handlersRef just below, for the mount-once
   // Escape key listener instead of Phaser's callbacks.
   useEffect(() => {
@@ -859,6 +893,10 @@ export function Game({ mode, onExitToMenu }: Props) {
         if (pawn) handlePawnClick(pawn);
       },
       onFieldClick: handleFieldClick,
+      onPawnPointerDown: (pawnId: string) => {
+        draggingPawnRef.current = pawnId;
+      },
+      onPawnDragEnd: handlePawnDragEnd,
     };
   });
 
@@ -867,6 +905,8 @@ export function Game({ mode, onExitToMenu }: Props) {
     scene.setCallbacks({
       onPawnClick: (pawnId) => handlersRef.current.onPawnClick(pawnId),
       onFieldClick: (point) => handlersRef.current.onFieldClick(point),
+      onPawnPointerDown: (pawnId) => handlersRef.current.onPawnPointerDown(pawnId),
+      onPawnDragEnd: (pawnId, point) => handlersRef.current.onPawnDragEnd(pawnId, point),
     });
     setSceneReady(true);
   }
@@ -890,6 +930,11 @@ export function Game({ mode, onExitToMenu }: Props) {
       kickKind,
       controllingSide: match.controllingSide,
       camera,
+      // Dragging an existing pawn is disabled while a NEW pawn's placement
+      // is armed (placingPawnSide) — otherwise a press on an existing pawn
+      // would be ambiguous between "reposition this one" and "place the new
+      // one here" (the latter is handlePawnClick's existing redirect).
+      pawnDragEnabled: mode === "solo" && !placingPawnSide,
     });
   });
 
