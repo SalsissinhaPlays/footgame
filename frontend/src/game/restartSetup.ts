@@ -1,4 +1,4 @@
-import { MAN_MARK_PULL_WEIGHT, MOVE_RANGE, PAWN_COLLISION_RADIUS, PAWN_SPEED_PER_TICK } from "./constants";
+import { MAN_MARK_PULL_WEIGHT, MOVE_RANGE, PAWN_OVERLAP_RADIUS, PAWN_SPEED_PER_TICK } from "./constants";
 import { candidateHeadings, distance } from "./resolve";
 import type { DeadBallResult, ResolveSnapshot } from "./resolve";
 import type { Pawn, Vec2 } from "./types";
@@ -70,7 +70,7 @@ export function resolveSetupTurn(pawns: Pawn[], deadBallSpot: Vec2): ResolveSnap
           !current.some((o) => {
             if (o.id === p.id) return false;
             const otherPos = settled.get(o.id) ?? o.pos;
-            return distance(otherPos, candidate) < PAWN_COLLISION_RADIUS;
+            return distance(otherPos, candidate) < PAWN_OVERLAP_RADIUS;
           })
       );
       settled.set(p.id, clear ?? p.pos);

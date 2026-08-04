@@ -5,7 +5,6 @@ import {
   DECISIVE_CONTEST_MARGIN,
   DEFLECTION_ANGLE_SPREAD,
   DEFLECTION_SPEED,
-  FOUL_AGGRESSIVE_BONUS,
   FOUL_CHANCE_AT_THRESHOLD,
   FOUL_CHANCE_MARGIN_RANGE,
   FOUL_CHANCE_MAX,
@@ -32,10 +31,11 @@ import {
   MAN_MARK_PULL_WEIGHT,
   MISHIT_SIGMA_MULTIPLIER,
   MOVE_RANGE,
+  HARD_TACKLE_FOUL_BONUS,
   OOB_CELLS,
   PASS_RANGE,
-  PAWN_COLLISION_RADIUS,
   PAWN_MOVE_BUDGET,
+  PAWN_OVERLAP_RADIUS,
   PAWN_SPEED_PER_TICK,
   PENALTY_SPOT_DEPTH,
   PRESSURE_RADIUS,
@@ -48,6 +48,7 @@ import {
   SPRINT_SPEED_MULTIPLIER,
   STAMINA_CHARGES_BASE,
   STAMINA_PER_BONUS_CHARGE,
+  TACKLE_COOLDOWN_SPEED_FACTOR,
   TACKLE_RADIUS,
 } from "./constants";
 import { sampleLanding } from "./aim";
@@ -97,7 +98,31 @@ function clampStepsToBudget(
     if (chargesUsed + cost > maxCharges) break;
     if (!step.kick) {
       const legDist = distance(cursor, step.pos);
-      if (legDist > remainingDistance) break;
+      if (legDist > remainingDistance) {
+        // Clamp to the edge of what's actually reachable, in the same
+        // direction, instead of discarding this step (and everything queued
+        // after it, including a kick) outright — mirrors Game.tsx's own
+        // "clamp instead of ignore" treatment for a click beyond reach. This
+        // matters even though the UI already clamps every click to the
+        // pawn's remaining budget before it's ever queued: recomputing the
+        // same distance independently here can round a hair differently
+        // than the UI's own clamp math did (e.g. landing on
+        // 6.000000000000002 units when the budget is exactly 6) — that tiny
+        // overshoot used to wipe the pawn's entire plan for the turn via the
+        // `break` this replaces, which is what a planned move landing right
+        // at the edge of reach could intermittently trigger.
+        if (remainingDistance > 0) {
+          const ratio = remainingDistance / legDist;
+          clamped.push({
+            ...step,
+            pos: {
+              x: cursor.x + (step.pos.x - cursor.x) * ratio,
+              y: cursor.y + (step.pos.y - cursor.y) * ratio,
+            },
+          });
+        }
+        break;
+      }
       remainingDistance -= legDist;
       cursor = step.pos;
     }
@@ -122,6 +147,16 @@ export interface ResolveResult {
   goal: Side | null;
   /** Set when the ball left the pitch (any of the three ball-states) and the turn froze for a restart — see boundaryCrossing/classifyDeadBall. */
   deadBall: DeadBallResult | null;
+  /**
+   * Pawn ids that entered at least one tackle challenge this turn, regardless
+   * of outcome (clean win, scrappy loss, miss, or foul). Game.tsx's post-turn
+   * bookkeeping uses this to (re)apply tackleCooldown — this can't be read
+   * off a pre-turn field the way plannedSprint drives sprintCooldown, since
+   * whether an attempt actually happened depends on resolution (did the
+   * declared/auto-tackle defender ever actually get within TACKLE_RADIUS of
+   * the carrier), not just intent.
+   */
+  tacklesAttempted: string[];
 }
 
 export interface DeadBallResult {
@@ -889,7 +924,7 @@ function gkAutoTarget(gk: Pawn, ballPos: Vec2, aggressive: boolean): Vec2 {
 
 /**
  * Resolves one full turn tick by tick. Invariant (relaxed for one case): no
- * two pawns may ever be closer than PAWN_COLLISION_RADIUS in any snapshot,
+ * two pawns may ever be closer than PAWN_OVERLAP_RADIUS in any snapshot,
  * EXCEPT that a goalkeeper positioned within his own penalty box may end up
  * closer than this to another pawn also converging there — modeling a
  * goalmouth scramble rather than two solid bodies that can never overlap
@@ -898,8 +933,24 @@ function gkAutoTarget(gk: Pawn, ballPos: Vec2, aggressive: boolean): Vec2 {
  * his line for a claim (see checkCapture's gk_aggressive handling) carry a
  * real positional cost. Pawns move continuously (any direction, real
  * distance per tick) rather than stepping cell-to-cell, so this is a
- * proximity guarantee, not an exact-cell one. Collisions are settled with a
- * skill check; losers are stopped for the rest of the turn.
+ * proximity guarantee, not an exact-cell one.
+ *
+ * Ordinary movement collision is now pure, contest-free geometry: a
+ * stationary pawn is a hard block (with a sidestep attempt before giving up
+ * for the tick — see candidateHeadings), and two pawns converging within
+ * PAWN_OVERLAP_RADIUS just get nudged apart. There is deliberately no skill
+ * contest and no "frozen for the rest of the turn" penalty for simply
+ * crossing paths or ending up near another pawn (any side, including
+ * teammates) — that used to exist (a "loose_ball" contest, tagged Rules 2/3),
+ * calibrated for an old grid-based movement model where losing "the turn"
+ * meant losing one small discrete step. Once turns became multi-tick,
+ * multi-leg continuous plans, that same freeze could silently waste an
+ * entire plan over an incidental near-miss with zero warning — removed
+ * outright rather than tuned, per an explicit user call: pawns should be
+ * free to brush past each other, full stop. The one place a pawn can still
+ * genuinely have the ball taken off it via contact is the tackle-challenge
+ * check further below, which is now itself a player-declared action
+ * (Pawn.plannedTackle / the auto_tackle stance), not automatic.
  *
  * The ball and pawn movement share this same tick loop rather than being two
  * sequential phases: a kicked ball is checked against every pawn's
@@ -981,7 +1032,6 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   }
 
   const destinations = new Map(current.map((p) => [p.id, currentStepTarget(p)]));
-  const stopped = new Set<string>();
   // Pawns who've committed to chasing a loose ball instead of their planned
   // move, and pawns who've already had their one-time chance to react (so a
   // pawn that chose to ignore a loose ball isn't re-asked every tick it
@@ -994,6 +1044,12 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
   // a new carrier (or a fresh challenger) always gets a real read.
   let tackleCarrierId: string | null = currentCarrierId;
   const tackleAttempted = new Set<string>();
+  // Unlike tackleAttempted above (which resets whenever the carrier changes,
+  // so a defender who already tried gets a fresh read against a NEW
+  // carrier), this never resets during the turn — it's purely for
+  // ResolveResult.tacklesAttempted, which Game.tsx uses to apply
+  // tackleCooldown regardless of how many times the carrier changed hands.
+  const tacklesAttemptedThisTurn = new Set<string>();
 
   // A turn's tick count is no longer a fixed MOVE_RANGE — a pawn chaining
   // several waypoints needs proportionally more ticks to actually walk the
@@ -1106,19 +1162,24 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     const candidates = new Map(
       current.map((p) => {
         const base = isPressured(p) ? PAWN_SPEED_PER_TICK * PRESSURE_SLOW_FACTOR : PAWN_SPEED_PER_TICK;
-        // Stacks multiplicatively with pressure rather than needing special
-        // casing — sprinting through an opponent's pressure nets to
+        // Recovering from a tackle attempt last turn (tackleCooldown > 0,
+        // stable for the whole resolveTurn call same as sprintCooldown is)
+        // also cuts effective speed, stacking multiplicatively same as
+        // pressure/sprint below.
+        const cooled = p.tackleCooldown > 0 ? base * TACKLE_COOLDOWN_SPEED_FACTOR : base;
+        // Stacks multiplicatively with pressure/cooldown rather than needing
+        // special casing — sprinting through an opponent's pressure nets to
         // PRESSURE_SLOW_FACTOR * SPRINT_SPEED_MULTIPLIER (a mild net
         // slowdown at the current tuning), which reads correctly as
         // "sprinting barely overcomes someone right on top of you."
-        const speed = p.plannedSprint ? base * SPRINT_SPEED_MULTIPLIER : base;
+        const speed = p.plannedSprint ? cooled * SPRINT_SPEED_MULTIPLIER : cooled;
         return [p.id, candidateHeadings(p.pos, destinations.get(p.id)!, speed)];
       })
     );
     const candidateIndex = new Map(current.map((p) => [p.id, 0]));
     const intended = new Map<string, Vec2>();
     for (const p of current) {
-      intended.set(p.id, stopped.has(p.id) ? p.pos : candidates.get(p.id)![0]);
+      intended.set(p.id, candidates.get(p.id)![0]);
     }
 
     const isMoving = (id: string) => distance(intended.get(id)!, preTickPos.get(id)!) > 1e-6;
@@ -1127,7 +1188,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     // nearby but is vacating the area too (which isn't a real obstacle).
     const stationaryBlockerAt = (pos: Vec2, excludeId: string) =>
       current.find(
-        (o) => o.id !== excludeId && !isMoving(o.id) && distance(preTickPos.get(o.id)!, pos) <= PAWN_COLLISION_RADIUS
+        (o) => o.id !== excludeId && !isMoving(o.id) && distance(preTickPos.get(o.id)!, pos) <= PAWN_OVERLAP_RADIUS
       );
     // A goalkeeper inside his own penalty box is exempt from the collision
     // rules below AS A BLOCKED PARTY (real football protects a keeper from
@@ -1140,11 +1201,17 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
       return p.player.position === "GK" && withinPenaltyBox(preTickPos.get(id)!, p.side);
     };
 
-    // Settling one collision can create a new one (e.g. a pawn frozen by rule 3
-    // becomes a hard block for someone else's path), so all three rules run
-    // together in a fixed-point loop until a full pass makes no more changes.
+    // Two contest-free geometry passes, run together in a fixed-point loop
+    // (settling one can create another — e.g. a pawn nudged aside by the
+    // second pass becomes a fresh hard block for a third pawn's path) until a
+    // full pass makes no more changes, capped so a pathological case can't
+    // spin forever. See this function's own doc comment above for why there
+    // is no skill-contest rule here anymore — ordinary movement collision
+    // used to freeze a pawn for the rest of the turn just for crossing paths
+    // or ending up near another pawn (any side); that's gone entirely.
     let changed = true;
-    while (changed) {
+    let safety = 0;
+    while (changed && safety++ < 20) {
       changed = false;
 
       // Rule 1: a cell held by a pawn that isn't vacating it this tick is a
@@ -1176,74 +1243,30 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         }
       }
 
-      // Rule 2: swaps — each pawn's intended position lands within
-      // PAWN_COLLISION_RADIUS of where the OTHER currently stands (a
-      // generalization of "exact reversal" for continuous positions: two
-      // pawns heading into each other's space, not necessarily a pixel-perfect
-      // trade). Neither completes the crossing this tick; the loser is
-      // stopped for good, the winner may try again on a later tick.
+      // Overlap nudge: the only thing left protecting the "never occupy the
+      // exact same point" invariant for two pawns who are BOTH still moving
+      // this tick (Rule 1 above only ever checks against a stationary
+      // blocker). No contest, no event, no lasting consequence — just push
+      // each apart along the line between their intended positions, enough
+      // to clear PAWN_OVERLAP_RADIUS, and let them carry on. Pure geometry,
+      // deliberately invisible in normal play.
       for (const p of current) {
-        if (!isMoving(p.id) || stopped.has(p.id) || gkProtected(p.id)) continue;
-        const dest = intended.get(p.id)!;
-        // Same combined-predicate approach as Rule 1: search for a pawn that
-        // satisfies the FULL swap condition (moving, not stopped, heading
-        // roughly into p's current spot while p heads into theirs) in one
-        // pass, rather than taking whichever pawn happens to be nearest
-        // `dest` first and only then checking if it qualifies — otherwise an
-        // unrelated nearby pawn that fails one condition could mask a real
-        // swap partner a little further off but still within radius.
-        const occupant = current.find(
-          (o) =>
-            o.id !== p.id &&
-            isMoving(o.id) &&
-            !stopped.has(o.id) &&
-            !gkProtected(o.id) &&
-            distance(preTickPos.get(o.id)!, dest) <= PAWN_COLLISION_RADIUS &&
-            distance(intended.get(o.id)!, preTickPos.get(p.id)!) <= PAWN_COLLISION_RADIUS
+        if (!isMoving(p.id) || gkProtected(p.id)) continue;
+        const a = intended.get(p.id)!;
+        const other = current.find(
+          (o) => o.id !== p.id && !gkProtected(o.id) && distance(a, intended.get(o.id)!) < PAWN_OVERLAP_RADIUS
         );
-        if (!occupant) continue;
-
-        const winner = resolveContest([p, occupant], "loose_ball");
-        const loser = winner.id === p.id ? occupant : p;
-        events.push(
-          `Collision crossing paths: ${p.player.name} vs ${occupant.player.name} — ${winner.player.name} wins`
-        );
-        stopped.add(loser.id);
-        intended.set(loser.id, preTickPos.get(loser.id)!);
-        intended.set(winner.id, preTickPos.get(winner.id)!);
+        if (!other) continue;
+        const b = intended.get(other.id)!;
+        const d = distance(a, b);
+        // Degenerate case (two pawns landing on the exact same point, no
+        // direction to separate along) — push along an arbitrary fixed axis
+        // rather than dividing by zero.
+        const dir = d > 1e-6 ? { x: (a.x - b.x) / d, y: (a.y - b.y) / d } : { x: 1, y: 0 };
+        const push = (PAWN_OVERLAP_RADIUS - d) / 2;
+        intended.set(p.id, { x: a.x + dir.x * push, y: a.y + dir.y * push });
+        intended.set(other.id, { x: b.x - dir.x * push, y: b.y - dir.y * push });
         changed = true;
-      }
-
-      // Rule 3: three-plus-way contests — pawns converging on intended
-      // positions that are mutually close, not necessarily identical. Grouped
-      // by simple proximity (not a full transitive closure — pawn counts are
-      // small enough that this is a non-issue in practice) rather than an
-      // exact-cell key, since "the same free cell" doesn't mean anything once
-      // destinations are continuous.
-      const movingIds = current.filter((p) => isMoving(p.id) && !gkProtected(p.id)).map((p) => p.id);
-      const grouped = new Set<string>();
-      for (const id of movingIds) {
-        if (grouped.has(id)) continue;
-        const group = movingIds.filter(
-          (otherId) =>
-            !grouped.has(otherId) &&
-            distance(intended.get(id)!, intended.get(otherId)!) <= PAWN_COLLISION_RADIUS
-        );
-        if (group.length <= 1) continue;
-        for (const gid of group) grouped.add(gid);
-
-        const contestants = group.map((gid) => current.find((p) => p.id === gid)!);
-        const winner = resolveContest(contestants, "loose_ball");
-        events.push(
-          `Contest for space: ${contestants.map((c) => c.player.name).join(" vs ")} — ${winner.player.name} wins`
-        );
-        for (const c of contestants) {
-          if (c.id !== winner.id) {
-            stopped.add(c.id);
-            intended.set(c.id, preTickPos.get(c.id)!);
-            changed = true;
-          }
-        }
       }
     }
 
@@ -1289,7 +1312,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           events.push(crossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
           const frozen = current.map((p) => ({ ...p, plannedSteps: [] }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: crossing.side, deadBall: null };
+          return { snapshots, goal: crossing.side, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
         }
         // Saved or parried: the flight ends here either way. Capture the
         // flight's direction before nulling it (needed for the parry's
@@ -1326,7 +1349,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         ballPos = boundary.point;
         events.push(deadBallLabel(deadBall));
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-        return { snapshots, goal: null, deadBall };
+        return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
       }
 
       const clampedPoint = clampBallToBounds(point);
@@ -1453,7 +1476,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           events.push(rollCrossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
           const frozen = current.map((p) => ({ ...p, plannedSteps: [] }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: rollCrossing.side, deadBall: null };
+          return { snapshots, goal: rollCrossing.side, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
         }
         roll = null;
         if (outcome.result === "caught") {
@@ -1485,7 +1508,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         ballPos = rollBoundary.point;
         events.push(deadBallLabel(deadBall));
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-        return { snapshots, goal: null, deadBall };
+        return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
       }
 
       const clampedRollPos = clampBallToBounds(ballPos);
@@ -1535,7 +1558,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           ballPos = dribbleBoundary.point;
           events.push(deadBallLabel(deadBall));
           snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: null, deadBall };
+          return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
         }
 
         // Tackling: a dribbling carrier can be challenged for the ball, not
@@ -1547,13 +1570,29 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         // a clean, instant takeover; a narrow one only knocks the ball loose
         // (reusing the exact same roll/deflection machinery as a mishit or
         // half-blocked shot).
+        // Only a pawn that's actually declared a tackle this turn — either an
+        // explicit plannedTackle, or the standing auto_tackle stance — and
+        // isn't on cooldown from a previous attempt is even eligible to
+        // challenge. This is what makes tackling a player-declared skill
+        // instead of the old always-on "any nearby opponent" check.
         const challenger = current
-          .filter((p) => p.side !== holder.side && !tackleAttempted.has(p.id))
+          .filter(
+            (p) =>
+              p.side !== holder.side &&
+              !tackleAttempted.has(p.id) &&
+              p.tackleCooldown === 0 &&
+              (p.plannedTackle !== null || p.stance?.kind === "auto_tackle")
+          )
           .map((p) => ({ p, d: distance(p.pos, holder.pos) }))
           .filter(({ d }) => d <= TACKLE_RADIUS)
           .sort((a, b) => a.d - b.d)[0]?.p;
 
         if (challenger) {
+          // auto_tackle firing with no explicit declaration defaults to the
+          // safe Clean option — Hard is only ever what the player (or the AI)
+          // explicitly asked for.
+          const tackleKind = challenger.plannedTackle?.kind ?? "clean";
+          tacklesAttemptedThisTurn.add(challenger.id);
           const { winner, margin } = resolveContestDetailed([challenger, holder], "tackle");
           if (winner === challenger) {
             if (margin >= DECISIVE_CONTEST_MARGIN) {
@@ -1584,7 +1623,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
             // Challenger lost — margin is holder's advantage, i.e. how badly
             // the tackle attempt went. Only a genuinely bad miss risks a
             // foul; a narrow, competent-but-unsuccessful challenge never
-            // does. Aggressive stance nudges the chance up on top of its
+            // does. A Hard tackle nudges the chance up on top of its
             // existing tackle-contest bonus — a real risk/reward trade-off,
             // not a pure upside.
             if (margin >= DECISIVE_CONTEST_MARGIN) {
@@ -1592,7 +1631,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
                 FOUL_CHANCE_AT_THRESHOLD +
                 (FOUL_CHANCE_MAX - FOUL_CHANCE_AT_THRESHOLD) *
                   Math.min(1, (margin - DECISIVE_CONTEST_MARGIN) / FOUL_CHANCE_MARGIN_RANGE);
-              if (challenger.stance?.kind === "aggressive") foulChance += FOUL_AGGRESSIVE_BONUS;
+              if (tackleKind === "hard") foulChance += HARD_TACKLE_FOUL_BONUS;
               if (Math.random() < foulChance) {
                 const deadBall = classifyFoul(holder, challenger);
                 const sideName = deadBall.side === "home" ? "the home side" : "the away side";
@@ -1607,7 +1646,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
                   ballHeight,
                   events: takeNewEvents(),
                 });
-                return { snapshots, goal: null, deadBall };
+                return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
               }
             }
             tackleAttempted.add(challenger.id);
@@ -1670,12 +1709,12 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     if (outcome.result === "goal") {
       events.push(finalGoalSide === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
       if (last) last.events.push(...takeNewEvents());
-      return { snapshots, goal: finalGoalSide, deadBall: null };
+      return { snapshots, goal: finalGoalSide, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
     }
     events.push(`${outcome.gk.player.name} denies it right on the line!`);
     if (last) last.events.push(...takeNewEvents());
-    return { snapshots, goal: null, deadBall: null };
+    return { snapshots, goal: null, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
   }
 
-  return { snapshots, goal: null, deadBall: null };
+  return { snapshots, goal: null, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
 }

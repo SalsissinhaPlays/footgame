@@ -35,10 +35,10 @@ export type Side = "home" | "away";
  *
  * gk_on_line/gk_aggressive are GK-only (enforced at the UI level, not the
  * type level — the same limitation man_mark already has: nothing stops an
- * outfield pawn from being assigned one). Deliberately not reusing the
- * "aggressive" literal for the GK variant — contest.ts's stanceBonus already
- * keys off kind === "aggressive" for an outfield tackle bonus, and a name
- * collision would risk a GK tripping that branch.
+ * outfield pawn from being assigned one). `gk_aggressive` is a deliberately
+ * separate literal from any outfield stance — it governs unrelated GK
+ * positioning/claim-eligibility behavior (see resolve.ts's gkAutoTarget and
+ * checkCapture).
  *
  * `expecting_header` gates header eligibility itself (see resolve.ts's
  * checkHeader), not a contest bonus like the others — without it, a lofted
@@ -50,13 +50,24 @@ export type Side = "home" | "away";
  * involuntarily turn into a header duel the instant it crossed headable
  * height — real football requires anticipating a cross to attack/defend it
  * in the air, not an automatic reflex.
+ *
+ * `auto_tackle` is the one stance that does NOT reset to "None" every turn
+ * the way every other stance does (see Game.tsx's post-turn bookkeeping) —
+ * it's a standing "let this defender auto-tackle whenever it gets the
+ * chance" order that persists until the player explicitly changes it,
+ * deliberately different from every other stance's turn-scoped lifetime.
+ * See resolve.ts's tackle-challenge gating and Pawn.plannedTackle below for
+ * how it interacts with an explicit, one-turn tackle declaration. The old
+ * outfield "aggressive" stance (a flat tackle-contest bonus + foul-risk bump)
+ * was retired in favor of an explicit Clean/Hard choice on plannedTackle —
+ * see constants.ts's HARD_TACKLE_PACE_FACTOR/HARD_TACKLE_FOUL_BONUS.
  */
 export type Stance =
-  | { kind: "aggressive" }
   | { kind: "pressure" }
   | { kind: "cover_passing" }
   | { kind: "man_mark"; targetId: string }
   | { kind: "expecting_header" }
+  | { kind: "auto_tackle" }
   | { kind: "gk_on_line" }
   | { kind: "gk_aggressive" };
 
@@ -112,6 +123,31 @@ export interface Pawn {
    * per-turn order.
    */
   sprintCooldown: number;
+  /**
+   * This turn's explicit tackle declaration — turn-scoped like plannedSprint,
+   * reset to null every turn regardless of whether an attempt actually
+   * happened (see ResolveResult.tacklesAttempted in resolve.ts for that
+   * separate signal). Not part of plannedSteps: unlike a kick, a tackle isn't
+   * tied to a position in the movement/kick chain — resolve.ts checks it
+   * every tick against whichever opponent currently carries the ball,
+   * wherever this pawn happens to be that tick. `kind` picks Clean (baseline
+   * roll, no extra foul risk) vs Hard (pace-scaled tackle-contest bonus, more
+   * foul risk on a bad miss) — see constants.ts's HARD_TACKLE_PACE_FACTOR/
+   * HARD_TACKLE_FOUL_BONUS. The `auto_tackle` stance can also trigger a
+   * tackle attempt with no explicit plannedTackle set at all (defaults to
+   * Clean when it fires) — see resolve.ts's tackle-challenge filter.
+   */
+  plannedTackle: { kind: "clean" | "hard" } | null;
+  /**
+   * Turns remaining before this pawn can enter another tackle challenge (0 =
+   * available) — NOT turn-scoped, same persistence shape as sprintCooldown.
+   * While > 0, this pawn's effective movement speed is halved (see
+   * constants.ts's TACKLE_COOLDOWN_SPEED_FACTOR) and it's ineligible for a
+   * new tackle challenge regardless of plannedTackle/auto_tackle. Set by
+   * Game.tsx's post-turn bookkeeping whenever this pawn's id appears in
+   * ResolveResult.tacklesAttempted, decremented otherwise.
+   */
+  tackleCooldown: number;
 }
 
 export interface Ball {

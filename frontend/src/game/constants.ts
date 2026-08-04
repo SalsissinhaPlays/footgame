@@ -73,13 +73,31 @@ export const DECISIVE_CONTEST_MARGIN = 15;
 // Foul risk on a decisively lost tackle (see resolve.ts's tackle-challenge
 // branch) — chance ramps from FOUL_CHANCE_AT_THRESHOLD right at
 // DECISIVE_CONTEST_MARGIN up to FOUL_CHANCE_MAX as the loss gets more
-// lopsided, over FOUL_CHANCE_MARGIN_RANGE. Aggressive stance adds a flat
-// bonus on top — a real trade-off for its existing tackle-contest bonus,
-// not a pure upside.
+// lopsided, over FOUL_CHANCE_MARGIN_RANGE. A Hard tackle adds a flat bonus on
+// top — a real trade-off for its existing tackle-contest bonus, not a pure
+// upside (see HARD_TACKLE_PACE_FACTOR/HARD_TACKLE_FOUL_BONUS below).
 export const FOUL_CHANCE_AT_THRESHOLD = 0.12;
 export const FOUL_CHANCE_MAX = 0.35;
 export const FOUL_CHANCE_MARGIN_RANGE = 30;
-export const FOUL_AGGRESSIVE_BONUS = 0.08;
+
+// Tackling is a player-declared skill (Pawn.plannedTackle), not an always-on
+// automatic check — every attempt (any outcome: clean win, scrappy loose
+// ball, miss, or foul) costs the challenger a full turn of Tackle
+// eligibility and halves their movement speed for that turn, a real cost
+// against spamming it. TACKLE_COOLDOWN_TURNS is deliberately much shorter
+// than SPRINT_COOLDOWN_TURNS (3) — a tackle is a single-tick event, not a
+// whole-turn commitment the way sprint is.
+export const TACKLE_COOLDOWN_TURNS = 1;
+export const TACKLE_COOLDOWN_SPEED_FACTOR = 0.5;
+
+// Hard tackle: an explicit, riskier choice on Pawn.plannedTackle — a real
+// contest bonus plus a real foul-risk bump, the exact numbers the old
+// outfield "aggressive" stance used to grant unconditionally (now retired —
+// see types.ts's Stance doc comment). Clean tackle deliberately gets neither
+// bonus: it's the safe baseline this whole split exists to give players a
+// genuine reason to choose over Hard.
+export const HARD_TACKLE_PACE_FACTOR = 0.15;
+export const HARD_TACKLE_FOUL_BONUS = 0.08;
 
 // Fixed penalty-spot depth off the goal line (inside GK_PENALTY_DEPTH's
 // 2.6-unit box) — real football's spot sits roughly 2/3 of the way through
@@ -169,8 +187,16 @@ export const REACT_RADIUS = 4.5;
 // decouples "how many ticks resolve" from "how far a pawn can actually
 // travel."
 export const PAWN_SPEED_PER_TICK = 1;
-// Minimum distance kept between any two pawns.
-export const PAWN_COLLISION_RADIUS = 1.4;
+// The ONLY hard constraint on ordinary pawn movement: two pawns may never
+// occupy the exact same point. Deliberately tiny — pawns are free to cross
+// paths and brush past each other (see resolve.ts's Rule 1 + overlap-nudge
+// pass); this exists purely to stop two sprites rendering on top of each
+// other, not to model "personal space" the way the old, much larger
+// PAWN_COLLISION_RADIUS (1.4, retired) used to. Comfortably smaller than
+// TACKLE_RADIUS below, which is what lets a tackle-eligible defender's
+// approach always trigger the real tackle-challenge check first, well
+// before this radius could ever matter between those same two pawns.
+export const PAWN_OVERLAP_RADIUS = 0.3;
 // Total real-distance reach for a pawn's WHOLE turn — unchanged in total
 // amount from before waypoint chains existed. A chain doesn't add extra
 // range; it lets that same fixed budget be split across several shorter
@@ -202,8 +228,8 @@ export const STAMINA_PER_BONUS_CHARGE = 25;
 export const KICK_CHARGE_COST = 1;
 
 // How close an opponent has to get to a dribbling ball carrier before they
-// can attempt a tackle — a bit more generous than PAWN_COLLISION_RADIUS
-// since this represents a boot reaching in, not the pawns' bodies overlapping.
+// can attempt a tackle — well beyond PAWN_OVERLAP_RADIUS since this
+// represents a boot reaching in, not the pawns' bodies overlapping.
 export const TACKLE_RADIUS = 1.7;
 
 // The visual checkerboard/speckle grid is drawn in tiles of this many world
@@ -220,7 +246,6 @@ export const CHECKER_CELL_SIZE = 4;
 // RANDOM_SPREAD), so a factor of ~0.1-0.15 against a ~50-average attribute
 // gives a bonus in the same ballpark as the random spread — a real edge,
 // not a coin-flip override of the underlying attributes.
-export const STANCE_AGGRESSIVE_PACE_FACTOR = 0.15;
 export const STANCE_COVER_PASSING_SKILL_FACTOR = 0.15;
 export const STANCE_MAN_MARK_SKILL_FACTOR = 0.1;
 export const STANCE_MAN_MARK_PACE_FACTOR = 0.1;

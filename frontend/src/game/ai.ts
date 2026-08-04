@@ -156,7 +156,7 @@ type PawnIntent =
   | { kind: "carrier_cross"; aim: Vec2; targetId: string }
   | { kind: "carrier_pass"; targetId: string }
   | { kind: "carrier_dribble"; thenKick?: { aim: Vec2; kind: "shot" | "pass"; targetId?: string } }
-  | { kind: "press"; targetId: string; aggressive: boolean }
+  | { kind: "press"; targetId: string; willTackle: boolean }
   | { kind: "man_mark"; targetId: string }
   | { kind: "cover_passing"; laneTarget: Vec2 }
   | { kind: "expect_cross_defensively" }
@@ -308,8 +308,12 @@ function decideDefensiveIntents(context: TeamContext, profile: TacticalProfile):
     const presser = [...outfield].sort((a, b) => distance(a.pos, carrier.pos) - distance(b.pos, carrier.pos))[0];
     if (presser) {
       assigned.add(presser.id);
-      const aggressive = distance(presser.pos, carrier.pos) <= TACKLE_PROXIMITY_AGGRESSIVE_FRACTION * TACKLE_RADIUS;
-      intents.set(presser.id, { kind: "press", targetId: carrier.id, aggressive });
+      // "Optimistic" the same way a kick declared before actually reaching
+      // the carrier is — if the presser isn't in range by the time ticks
+      // run, the tackle just never fires (see resolve.ts's tackle-challenge
+      // filter), same fizzle-is-fine philosophy already used for kicks.
+      const willTackle = distance(presser.pos, carrier.pos) <= TACKLE_PROXIMITY_AGGRESSIVE_FRACTION * TACKLE_RADIUS;
+      intents.set(presser.id, { kind: "press", targetId: carrier.id, willTackle });
     }
   }
 
@@ -561,8 +565,14 @@ function realizePawnIntent(pawn: Pawn, intent: PawnIntent, context: TeamContext,
       const rawDist = distance(pawn.pos, carrierPos);
       const sprint = maybeSprint(pawn, rawDist, profile);
       const steps = buildChain(pawn.pos, [{ pos: carrierPos }], pawn.player, sprint);
-      const stance: Stance = intent.aggressive ? { kind: "aggressive" } : { kind: "pressure" };
-      return { ...pawn, plannedSteps: steps, stance, plannedSprint: sprint };
+      // Pressing (slows the carrier) and tackling are independent now, not a
+      // stance either/or — a presser gets both at once when close enough.
+      // Always declares Hard (no risk-aversion model to pick Clean with
+      // today — a natural future TacticalProfile hook, not needed yet), and
+      // only when off cooldown, mirroring maybeSprint's own gating shape.
+      const plannedTackle: Pawn["plannedTackle"] =
+        intent.willTackle && pawn.tackleCooldown === 0 ? { kind: "hard" } : null;
+      return { ...pawn, plannedSteps: steps, stance: { kind: "pressure" }, plannedSprint: sprint, plannedTackle };
     }
 
     case "man_mark": {

@@ -3,7 +3,7 @@ import {
   GK_REACH_FALLOFF_RANGE,
   GK_STRETCH_RANGE_BASE,
   GK_STRETCH_RANGE_PER_JUMPING,
-  STANCE_AGGRESSIVE_PACE_FACTOR,
+  HARD_TACKLE_PACE_FACTOR,
   STANCE_COVER_PASSING_SKILL_FACTOR,
   STANCE_EXPECTING_HEADER_JUMPING_FACTOR,
   STANCE_MAN_MARK_PACE_FACTOR,
@@ -79,9 +79,6 @@ const RANDOM_SPREAD = 30; // roll gets +/- half of this, i.e. +/-15
 function stanceBonus(pawn: Pawn, against: Pawn | null, kind: ContestKind): number {
   const stance = pawn.stance;
   if (!stance) return 0;
-  if (stance.kind === "aggressive" && kind === "tackle") {
-    return pawn.player.pace * STANCE_AGGRESSIVE_PACE_FACTOR;
-  }
   if (stance.kind === "cover_passing" && kind === "interception") {
     return pawn.player.skill * STANCE_COVER_PASSING_SKILL_FACTOR;
   }
@@ -99,13 +96,32 @@ function stanceBonus(pawn: Pawn, against: Pawn | null, kind: ContestKind): numbe
   return 0;
 }
 
+/**
+ * Hard tackle's contest bonus — kept separate from stanceBonus rather than
+ * folded into it, since Pawn.plannedTackle and Pawn.stance are independent
+ * fields now (unlike the old outfield "aggressive" stance this replaces,
+ * which WAS a stance). A pawn can be man-marking a specific opponent AND
+ * declaring a Hard tackle on them in the same turn — both bonuses need to
+ * apply together, which folding this into stanceBonus's early-return chain
+ * would silently break.
+ */
+function tackleTypeBonus(pawn: Pawn, kind: ContestKind): number {
+  if (kind !== "tackle" || pawn.plannedTackle?.kind !== "hard") return 0;
+  return pawn.player.pace * HARD_TACKLE_PACE_FACTOR;
+}
+
 function rollFor(pawn: Pawn, kind: ContestKind, against: Pawn | null): number {
   const w = WEIGHTS[kind];
   let base = 0;
   for (const attr of Object.keys(w) as ContestAttribute[]) {
     base += pawn.player[attr] * (w[attr] ?? 0);
   }
-  return base + stanceBonus(pawn, against, kind) + (Math.random() * RANDOM_SPREAD - RANDOM_SPREAD / 2);
+  return (
+    base +
+    stanceBonus(pawn, against, kind) +
+    tackleTypeBonus(pawn, kind) +
+    (Math.random() * RANDOM_SPREAD - RANDOM_SPREAD / 2)
+  );
 }
 
 /**

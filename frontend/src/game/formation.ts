@@ -35,11 +35,11 @@ export function buildFormation(players: PlayerDTO[], side: Side, formation: Form
       side,
       pos,
       plannedSteps: [],
-      plannedKick: null,
-      plannedKickLoft: false,
       stance: null,
       plannedSprint: false,
       sprintCooldown: 0,
+      plannedTackle: null,
+      tackleCooldown: 0,
     };
   });
 }

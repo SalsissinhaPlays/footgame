@@ -12,6 +12,7 @@ import {
   PAWN_MOVE_BUDGET,
   SPRINT_COOLDOWN_TURNS,
   SPRINT_SPEED_MULTIPLIER,
+  TACKLE_COOLDOWN_TURNS,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
@@ -92,11 +93,11 @@ function eventClass(e: string): string {
 const NONE_OPTION = { key: "none" as const, label: "None" };
 const OUTFIELD_STANCE_OPTIONS = [
   NONE_OPTION,
-  { key: "aggressive" as const, label: "Aggressive" },
   { key: "pressure" as const, label: "Pressure" },
   { key: "cover_passing" as const, label: "Cover passing" },
   { key: "man_mark" as const, label: "Man-mark" },
   { key: "expecting_header" as const, label: "Expecting header" },
+  { key: "auto_tackle" as const, label: "Auto-tackle" },
 ];
 const GK_STANCE_OPTIONS = [
   NONE_OPTION,
@@ -126,6 +127,11 @@ const KICK_KIND_LABEL: Record<"shot" | "pass" | "cross", string> = {
   shot: "Shot",
   pass: "Pass",
   cross: "Cross",
+};
+
+const TACKLE_KIND_LABEL: Record<"clean" | "hard", string> = {
+  clean: "Clean",
+  hard: "Hard",
 };
 
 function kickoffFormation(pawns: Pawn[]): Pawn[] {
@@ -266,6 +272,11 @@ export function Game({ mode, onExitToMenu }: Props) {
   // not rolling it (see resolve.ts's startFlight and the Ground/Loft row
   // below, hidden when kickKind is "cross").
   const [kickKind, setKickKind] = useState<"shot" | "pass" | "cross">("pass");
+  // Declaring a tackle isn't a click-target mode the way Kick is (it's not
+  // aimed anywhere) — it's a pure button action, like Sprint, just with a
+  // Clean/Hard sub-choice revealed while open. Toggling it off (or picking
+  // the already-active kind again) clears the declaration.
+  const [tackleMode, setTackleMode] = useState(false);
   const [stanceMenuOpen, setStanceMenuOpen] = useState(false);
   // True while the player has picked "Man-mark" for the selected pawn and
   // is now expected to click an opponent pawn instead of a cell/destination.
@@ -524,6 +535,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setKickMode(false);
     setKickLoft(false);
     setKickKind("pass");
+    setTackleMode(false);
     setPickingMarkTarget(false);
     setStanceMenuOpen(false);
     setSelectedId((current) => (current === pawn.id ? null : pawn.id));
@@ -651,6 +663,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setKickMode(false);
     setKickLoft(false);
     setKickKind("pass");
+    setTackleMode(false);
     setPickingMarkTarget(false);
     setStanceMenuOpen(false);
   }
@@ -711,6 +724,28 @@ export function Game({ mode, onExitToMenu }: Props) {
       ...prev,
       pawns: prev.pawns.map((p) => (p.id === selectedPawn.id ? { ...p, plannedSprint: !p.plannedSprint } : p)),
     }));
+  }
+
+  /**
+   * Declares (or, clicking the already-active kind again, clears) the
+   * selected pawn's tackle attempt for this turn — a pure button action like
+   * Sprint, not a click-target mode like Kick, since a tackle isn't aimed
+   * anywhere: it just fires against whoever's carrying the ball, the moment
+   * this pawn gets within range (see resolve.ts's tackle-challenge filter).
+   * Gated by cooldown the same way Sprint is.
+   */
+  function handleSetTackle(kind: "clean" | "hard") {
+    if (!selectedPawn) return;
+    if (!selectedPawn.plannedTackle && selectedPawn.tackleCooldown > 0) return;
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) =>
+        p.id === selectedPawn.id
+          ? { ...p, plannedTackle: p.plannedTackle?.kind === kind ? null : { kind } }
+          : p
+      ),
+    }));
+    setTackleMode(false);
   }
 
   // Same stale-closure fix as handlersRef just below, for the mount-once
@@ -797,9 +832,15 @@ export function Game({ mode, onExitToMenu }: Props) {
         ...prev,
         pawns: prev.pawns.map((p) => ({
           ...p,
-          stance: p.stance ? null : p.stance,
+          // Same auto_tackle exception as the live-turn path below. No
+          // tackle is ever attempted during a dead-ball setup turn (the ball
+          // is dead the whole time — resolveSetupTurn has no notion of
+          // tackling at all), so tackleCooldown just decrements.
+          stance: p.stance?.kind === "auto_tackle" ? p.stance : p.stance ? null : p.stance,
           plannedSprint: false,
           sprintCooldown: p.plannedSprint ? SPRINT_COOLDOWN_TURNS : Math.max(0, p.sprintCooldown - 1),
+          plannedTackle: null,
+          tackleCooldown: Math.max(0, p.tackleCooldown - 1),
         })),
         restartSetup: turnsRemaining > 0 ? { ...restartSetup, turnsRemaining } : null,
         turn: prev.turn + 1,
@@ -810,7 +851,7 @@ export function Game({ mode, onExitToMenu }: Props) {
       return;
     }
 
-    const { snapshots, goal, deadBall } = resolveTurn(inputPawns, match.ball);
+    const { snapshots, goal, deadBall, tacklesAttempted } = resolveTurn(inputPawns, match.ball);
     let prevPawns = inputPawns;
     let prevBallPos = match.ball.pos;
     // Revealed tick-by-tick in step with the animation, rather than dumped
@@ -837,18 +878,26 @@ export function Game({ mode, onExitToMenu }: Props) {
     // A stance is a standing order for this turn only — resolve.ts relies on
     // it staying put across every tick of the turn it was set for (so a
     // man-marking pawn keeps re-aiming), but it shouldn't silently carry
-    // over once planning for the NEXT turn begins. Sprint's cooldown is the
-    // opposite: it's the one thing that DOES need to persist and evolve
-    // turn-over-turn, computed here (not resolve.ts, which has no notion of
-    // "next turn") in the same pass — a pawn that just sprinted resets to a
-    // full cooldown, everyone else's existing cooldown ticks down by one.
+    // over once planning for the NEXT turn begins. auto_tackle is the one
+    // deliberate exception (see types.ts's Stance doc comment) — it stays
+    // set until the player explicitly changes it, unlike every other stance.
+    // Sprint's cooldown is the opposite of a turn-scoped order: it's one of
+    // the things that DOES need to persist and evolve turn-over-turn,
+    // computed here (not resolve.ts, which has no notion of "next turn") in
+    // the same pass — a pawn that just sprinted resets to a full cooldown,
+    // everyone else's existing cooldown ticks down by one. tackleCooldown
+    // works the same way, driven by ResolveResult.tacklesAttempted rather
+    // than a pre-turn field, since whether an attempt actually happened
+    // (not just whether one was declared) depends on resolution.
     setMatch((prev) => ({
       ...prev,
       pawns: prev.pawns.map((p) => ({
         ...p,
-        stance: p.stance ? null : p.stance,
+        stance: p.stance?.kind === "auto_tackle" ? p.stance : p.stance ? null : p.stance,
         plannedSprint: false,
         sprintCooldown: p.plannedSprint ? SPRINT_COOLDOWN_TURNS : Math.max(0, p.sprintCooldown - 1),
+        plannedTackle: null,
+        tackleCooldown: tacklesAttempted.includes(p.id) ? TACKLE_COOLDOWN_TURNS : Math.max(0, p.tackleCooldown - 1),
       })),
     }));
 
@@ -925,6 +974,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     setKickMode(false);
     setKickLoft(false);
     setKickKind("pass");
+    setTackleMode(false);
     setPickingMarkTarget(false);
 
     if (mode === "ai") {
@@ -1006,7 +1056,7 @@ export function Game({ mode, onExitToMenu }: Props) {
           <div className="hud-top-left">
             {selectedPawn ? (
               <div className="hud-panel pawn-info">
-                <div className="pawn-info-name">
+                <div className={`pawn-info-name ${selectedPawn.side}`}>
                   #{selectedPawn.player.jersey_number} {selectedPawn.player.name}
                 </div>
                 <div className="pawn-info-row">Stance: {stanceLabel(selectedPawn.stance)}</div>
@@ -1030,6 +1080,14 @@ export function Game({ mode, onExitToMenu }: Props) {
                       </div>
                     );
                   })()}
+                {(selectedPawn.plannedTackle || selectedPawn.tackleCooldown > 0) && (
+                  <div className="pawn-info-row">
+                    Tackle:{" "}
+                    {selectedPawn.plannedTackle
+                      ? TACKLE_KIND_LABEL[selectedPawn.plannedTackle.kind]
+                      : `Cooldown (${selectedPawn.tackleCooldown})`}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="hud-panel pawn-info pawn-info-empty">No pawn selected</div>
@@ -1097,7 +1155,10 @@ export function Game({ mode, onExitToMenu }: Props) {
                     type="button"
                     className={kickMode ? "active" : ""}
                     disabled={chargesRemaining < KICK_CHARGE_COST || match.restartSetup !== null}
-                    onClick={() => setKickMode(true)}
+                    onClick={() => {
+                      setKickMode(true);
+                      setTackleMode(false);
+                    }}
                   >
                     Kick
                   </button>
@@ -1174,6 +1235,42 @@ export function Game({ mode, onExitToMenu }: Props) {
                       : "Sprint"}
                   </button>
                 </div>
+                <div className="action-row">
+                  <button
+                    type="button"
+                    className={selectedPawn.plannedTackle || tackleMode ? "active" : ""}
+                    disabled={!selectedPawn.plannedTackle && selectedPawn.tackleCooldown > 0}
+                    onClick={() => {
+                      const next = !tackleMode;
+                      setTackleMode(next);
+                      if (next) setKickMode(false);
+                    }}
+                  >
+                    {selectedPawn.plannedTackle
+                      ? `Tackle: ${TACKLE_KIND_LABEL[selectedPawn.plannedTackle.kind]}`
+                      : selectedPawn.tackleCooldown > 0
+                        ? `Tackle (${selectedPawn.tackleCooldown})`
+                        : "Tackle"}
+                  </button>
+                </div>
+                {tackleMode && (
+                  <div className="action-row">
+                    <button
+                      type="button"
+                      className={selectedPawn.plannedTackle?.kind === "clean" ? "active" : ""}
+                      onClick={() => handleSetTackle("clean")}
+                    >
+                      Clean
+                    </button>
+                    <button
+                      type="button"
+                      className={selectedPawn.plannedTackle?.kind === "hard" ? "active" : ""}
+                      onClick={() => handleSetTackle("hard")}
+                    >
+                      Hard
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

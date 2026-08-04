@@ -164,6 +164,16 @@
   margin-bottom: 4px;
 }
 
+/* Same blue/red pairing the scoreboard's turn-indicator already uses for
+   home/away, so a side's color means the same thing everywhere in the HUD. */
+.pawn-info-name.home {
+  color: #64b5f6;
+}
+
+.pawn-info-name.away {
+  color: #ef9a9a;
+}
+
 .pawn-info-row {
   opacity: 0.9;
 }

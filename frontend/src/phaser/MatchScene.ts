@@ -13,7 +13,6 @@ import {
   LOFT_APEX_HEIGHT_RATIO,
   LOFT_APEX_MAX,
   LOFT_APEX_MIN,
-  PAWN_COLLISION_RADIUS,
   PRESSURE_RADIUS,
   TACKLE_RADIUS,
 } from "../game/constants";
@@ -541,13 +540,15 @@ export class MatchScene extends Phaser.Scene {
   // --- Influence-radius debug overlay ---
 
   /**
-   * Tuning aid: draws each pawn's PAWN_COLLISION_RADIUS (the personal space
-   * that forces a detour around it), CAPTURE_RADIUS around the ball (how
-   * close a pass/interception has to get), and TACKLE_RADIUS around whoever
-   * currently carries it. These radii are otherwise invisible, which made
-   * outcomes ("why did that count as a tackle, they looked far apart")
-   * hard to predict by eye — this makes them visible so they can be tuned
-   * by watching actual play instead of just reading the numbers.
+   * Tuning aid: draws CAPTURE_RADIUS around the ball (how close a
+   * pass/interception has to get) and TACKLE_RADIUS around whoever currently
+   * carries it. These radii are otherwise invisible, which made outcomes
+   * ("why did that count as a tackle, they looked far apart") hard to
+   * predict by eye — this makes them visible so they can be tuned by
+   * watching actual play instead of just reading the numbers. (The old
+   * per-pawn "personal space" ring at PAWN_COLLISION_RADIUS is gone along
+   * with that whole mechanic — see resolve.ts's PAWN_OVERLAP_RADIUS, small
+   * enough now that a ring for it wouldn't be a meaningful tuning aid.)
    */
   private updateInfluenceOverlay() {
     const g = this.radiusGfx;
@@ -557,10 +558,6 @@ export class MatchScene extends Phaser.Scene {
     const { pawns, ball } = this.state;
 
     for (const pawn of pawns) {
-      const pts = isoCircle(p, pawn.pos.x + 0.5, pawn.pos.y + 0.5, PAWN_COLLISION_RADIUS, 20);
-      g.lineStyle(1, 0xffffff, 0.25);
-      strokePoly(g, pts, true);
-
       if (pawn.stance?.kind === "pressure") {
         const pressurePts = isoCircle(p, pawn.pos.x + 0.5, pawn.pos.y + 0.5, PRESSURE_RADIUS, 24);
         g.lineStyle(1.5, 0xab47bc, 0.5);
@@ -592,7 +589,7 @@ export class MatchScene extends Phaser.Scene {
       const visible =
         pawn.side === controllingSide
           ? pawn
-          : { ...pawn, plannedSteps: [], stance: null, plannedSprint: false };
+          : { ...pawn, plannedSteps: [], stance: null, plannedSprint: false, plannedTackle: null };
       let visual = this.pawnVisuals.get(pawn.id);
       if (!visual) {
         visual = this.createPawnVisual(pawn);
