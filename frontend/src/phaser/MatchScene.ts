@@ -26,8 +26,42 @@ import {
   type Projector,
 } from "../game/iso";
 import { isShotOnTarget } from "../game/resolve";
+import { buildStadiumGeometry, STADIUM_MVP, type StandFace } from "../game/stadium";
 import type { Ball, Pawn, PlannedStep, Side, Vec2 } from "../game/types";
 import { EventBus } from "./EventBus";
+
+// Stadium geometry is static for now (STADIUM_MVP is a fixed constant, no
+// in-match editing yet), so it's computed once at module scope rather than
+// per-scene-instance — every MatchScene shares the same immutable face list.
+const stadiumFaces: StandFace[] = buildStadiumGeometry(STADIUM_MVP);
+
+// Flat placeholder material colors — solid fills, not sprite art, matching
+// how the pitch/goal boxes are drawn today. Swap for real textures once the
+// shape/camera pipeline is confirmed to hold up. Two distinct base colors
+// (not just one grey at different brightness) is what actually reads as
+// "seating on a concrete structure" instead of bare scaffolding — the color
+// contrast is doing the visual work here, not the shading.
+const STAND_STRUCTURE_COLOR = 0x9e9e9e;
+const STAND_SEATING_COLOR = 0x2f6fb3;
+// Thin dark edge drawn around every stand face — see renderStadium for why.
+// Same fixed-projected-pixel-space convention the pitch's own boundary/goal
+// lines already use (e.g. redrawField's lineStyle(2.5, ...)), not a raw
+// world-unit value — toIso's output is already in that projected-pixel
+// scale, so a sub-1 value here would be all but invisible.
+const STAND_EDGE_WIDTH = 1.5;
+const STAND_EDGE_COLOR = 0x0a0f0a;
+const STAND_EDGE_ALPHA = 0.5;
+
+function standBaseColor(material: StandFace["material"]): number {
+  return material === "seating" ? STAND_SEATING_COLOR : STAND_STRUCTURE_COLOR;
+}
+
+function shadeColor(base: number, shade: number): number {
+  const r = Math.round(((base >> 16) & 0xff) * shade);
+  const g = Math.round(((base >> 8) & 0xff) * shade);
+  const b = Math.round((base & 0xff) * shade);
+  return (r << 16) | (g << 8) | b;
+}
 
 export interface MatchSyncState {
   pawns: Pawn[];
@@ -67,12 +101,11 @@ const SPRITE_HEIGHT = 90;
 // keeps all three close to their real proportions instead of stretching them.
 const SPRITE_WIDTH = SPRITE_HEIGHT * 0.44;
 const TWEEN_MS = 350;
-// Ball sprite lift: a flat baseline (matching the fixed offset this replaces)
-// plus extra pixels per world-unit of live ball height, mirroring how pawn
-// sprites are lifted by a flat pixel offset rather than anything routed
-// through the isometric projector's tilt math.
+// Ball sprite lift: a small flat baseline (purely stylistic — keeps the
+// sprite from sitting exactly on the shadow even at height 0) on top of the
+// real, tilt-correct pixel offset from the projector's heightOffset (see
+// iso.ts) for the ball's live height.
 const BALL_GROUND_LIFT = 10;
-const BALL_HEIGHT_PX_PER_UNIT = 14;
 
 // A pawn/field "click" only fires on release, and only if the pointer never
 // traveled further than this (in Phaser's game-pixel space) between its down
@@ -88,16 +121,18 @@ const CLICK_DRAG_THRESHOLD = 6;
  * How tall (in the same view-space pixels updateBall lifts the ball sprite
  * by) a lofted kick's on-screen arc preview should bulge for a kick of this
  * distance — mirrors resolve.ts's startFlight apexHeight formula exactly
- * (LOFT_APEX_MIN/MAX/HEIGHT_RATIO), converted through the same
- * BALL_HEIGHT_PX_PER_UNIT scale the real flight's height uses, so the
- * preview arc actually resembles the path the ball will take instead of an
- * arbitrary decorative bulge. Deliberately NOT divided by camera zoom, same
- * as updateBall's own liftPx — this represents a real world-space height,
- * not a fixed on-screen line width/label size.
+ * (LOFT_APEX_MIN/MAX/HEIGHT_RATIO), converted through the projector's own
+ * heightOffset (the same tilt-correct world-height-to-pixels conversion the
+ * real flight's height uses in updateBall), so the preview arc actually
+ * resembles the path the ball will take — including foreshortening
+ * correctly as the camera tilt changes — instead of an arbitrary decorative
+ * bulge. Deliberately NOT divided by camera zoom, same as updateBall's own
+ * liftPx — this represents a real world-space height, not a fixed on-screen
+ * line width/label size.
  */
-function apexHeightPx(dist: number): number {
+function apexHeightPx(dist: number, projector: Projector): number {
   const apexMeters = Math.min(LOFT_APEX_MAX, Math.max(LOFT_APEX_MIN, dist * LOFT_APEX_HEIGHT_RATIO));
-  return apexMeters * BALL_HEIGHT_PX_PER_UNIT;
+  return projector.heightOffset(apexMeters);
 }
 
 function spriteKeyFor(pawn: Pawn): string {
@@ -118,6 +153,15 @@ export class MatchScene extends Phaser.Scene {
   private fieldGfx!: Phaser.GameObjects.Graphics;
   private linesGfx!: Phaser.GameObjects.Graphics;
   private cellsGfx!: Phaser.GameObjects.Graphics;
+  // Stadium structures: static like fieldGfx (redrawn only when the
+  // camera's rotation/tilt changes, not every frame). Drawn at a depth
+  // below the pitch — deliberately ONLY the faces currently behind the
+  // pitch from the camera's angle (see renderStadium): a face between the
+  // camera and the pitch is never drawn at all, not drawn-in-front, which is
+  // what guarantees the pitch/pawns stay visible no matter how tall a stand
+  // gets later — the classic "hide the near wall" trick isometric games use
+  // so a tall structure can never block the view of what's inside/behind it.
+  private stadiumGfx!: Phaser.GameObjects.Graphics;
   private fieldZone!: Phaser.GameObjects.Zone;
   private radiusGfx!: Phaser.GameObjects.Graphics;
   private overlayGfx!: Phaser.GameObjects.Graphics;
@@ -176,6 +220,9 @@ export class MatchScene extends Phaser.Scene {
 
   create() {
     this.projector = createProjector(0, 0);
+    // Depth below the pitch (fieldGfx defaults to depth 0) — see the field
+    // declaration above for why only faces behind the pitch are ever drawn.
+    this.stadiumGfx = this.add.graphics().setDepth(-10);
     this.fieldGfx = this.add.graphics();
     this.linesGfx = this.add.graphics();
     this.cellsGfx = this.add.graphics();
@@ -309,9 +356,53 @@ export class MatchScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * The projected extent of the out-of-bounds apron's 4 corners PLUS every
+   * stadium face's corners, AT THE CURRENT rotation/tilt (as opposed to
+   * VIEW_W/VIEW_H, which is the worst-case extent across every possible
+   * angle, used only to size the fixed underlying world/canvas buffer). A
+   * non-square pitch's axis-aligned bounding box genuinely does grow and
+   * shrink as the camera orbits (the same way a rectangular card's on-screen
+   * bounding box pulses as it spins on a table, even though the card itself
+   * never changes size) — that part isn't a bug. What WAS worth fixing is
+   * that fitZoom used to be calibrated once to the worst case, so at every
+   * other angle the scene under-filled the canvas with growing/shrinking
+   * blank margin. Recomputing fitZoom from THIS live extent instead keeps
+   * the pitch AND stadium consistently filling the canvas at every angle —
+   * including the stadium here (not just the apron) is what stops the stands
+   * from getting clipped at the screen edges once the live zoom tightens in.
+   * Only counts stand faces that are actually going to be DRAWN (see
+   * projectVisibleStandFace) — a near-side face that's culled shouldn't make
+   * the zoom needlessly conservative for geometry nobody will see.
+   */
+  private currentSceneExtent(): { w: number; h: number } {
+    const p = this.projector;
+    const apronCorners = [
+      p.toIso(-OOB_MARGIN, -OOB_MARGIN),
+      p.toIso(GRID_COLS + OOB_MARGIN, -OOB_MARGIN),
+      p.toIso(GRID_COLS + OOB_MARGIN, GRID_ROWS + OOB_MARGIN),
+      p.toIso(-OOB_MARGIN, GRID_ROWS + OOB_MARGIN),
+    ];
+    const centerY = p.toIso(GRID_COLS / 2, GRID_ROWS / 2).y;
+    const stadiumCorners = stadiumFaces.flatMap((face) => this.projectVisibleStandFace(face, centerY) ?? []);
+    const all = [...apronCorners, ...stadiumCorners];
+    const xs = all.map((c) => c.x);
+    const ys = all.map((c) => c.y);
+    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  }
+
+  /** Falls back to the static worst-case VIEW_W/VIEW_H before the first syncState (no projector-bound camera state yet to measure a live extent from). */
+  private computeFitZoom(gameSize: { width: number; height: number }): number {
+    if (!this.state) {
+      return Math.min(gameSize.width / VIEW_W, gameSize.height / VIEW_H);
+    }
+    const { w, h } = this.currentSceneExtent();
+    return Math.min(gameSize.width / w, gameSize.height / h);
+  }
+
   /** Keeps the fixed-size isometric world fitted and centered as the real canvas size changes. */
   private handleResize(gameSize: { width: number; height: number }) {
-    this.fitZoom = Math.min(gameSize.width / VIEW_W, gameSize.height / VIEW_H);
+    this.fitZoom = this.computeFitZoom(gameSize);
     if (this.state) {
       this.applyCamera(this.state);
     } else {
@@ -362,7 +453,13 @@ export class MatchScene extends Phaser.Scene {
       this.projector = createProjector(state.camera.rotation, state.camera.tilt);
       this.lastRotation = state.camera.rotation;
       this.lastTilt = state.camera.tilt;
+      // Re-fit zoom to THIS angle's actual extent, not the static worst-case
+      // one (see currentApronExtent) — this is what stops the pitch from
+      // under-filling the canvas with a growing/shrinking margin as it
+      // rotates through non-worst-case angles.
+      this.fitZoom = this.computeFitZoom(this.scale.gameSize);
       this.redrawField();
+      this.renderStadium();
     }
 
     this.applyCamera(state);
@@ -742,6 +839,105 @@ export class MatchScene extends Phaser.Scene {
     return { container, sprite, badgeBg, badgeText, lastGridPos: { ...pawn.pos } };
   }
 
+  // --- Stadium ---
+
+  /**
+   * Projects one stand face's corners through the current camera and
+   * returns them alongside whether this face is currently BEHIND the pitch
+   * (comparing its OWN visibilityRef's screen-y against the pitch center's —
+   * a face landing further "north"/smaller-y than the pitch center is behind
+   * it from the current angle, further "south" means it's between the
+   * camera and the pitch). Deliberately NOT computed from this face's own
+   * corners (an earlier version averaged them, which let an end cap and the
+   * row-segment right next to it disagree — one judged near, one far — since
+   * their corners differ in depth/height even at the same along-position;
+   * visibilityRef is the SAME shared point for every face at that
+   * along-position, see stadium.ts, so they always agree). This is a
+   * per-face heuristic, not true 3D depth-sorting — deliberately so: rather
+   * than resolving occlusion (drawing the near side in front, which is what
+   * a real z-buffer would do), a face that isn't behind the pitch is simply
+   * never drawn at all (see renderStadium and currentSceneExtent, both of
+   * which call this) — the classic isometric-game "hide the near wall"
+   * trick, which is what actually guarantees the pitch/pawns stay visible no
+   * matter how tall a stand gets later. A fade/transparency approach was
+   * considered and rejected: it doesn't give the same hard guarantee at
+   * extreme height/closeness, and fighting the free-camera requirement with
+   * camera collision was ruled out even earlier in this project's camera
+   * work.
+   */
+  private projectVisibleStandFace(face: StandFace, centerY: number): Vec2[] | null {
+    const ref = face.visibilityRef;
+    const refY = this.projector.toIso(ref.x, ref.y, ref.height).y;
+    if (refY >= centerY) return null;
+    return face.corners.map((c) => this.projector.toIso(c.x, c.y, c.height));
+  }
+
+  /**
+   * Static: only called when the camera's rotation/tilt actually changes,
+   * same as redrawField. Three stages, and the ORDER faces get drawn in is
+   * the load-bearing part — the geometry always had real height, but a
+   * Graphics fill has no z-buffer, so with the old fixed build-order
+   * drawing, a face that should be hidden behind another could get stamped
+   * on top of it (worst at corners, where two different stands' faces
+   * overlap on screen), flattening the whole stand into wallpaper no matter
+   * how its faces were colored:
+   *
+   * 1. Pitch-blocking cull (projectVisibleStandFace): a stand slice between
+   *    the camera and the pitch is skipped entirely, so the pitch can never
+   *    be obscured however tall stands get.
+   * 2. Back-face cull: skip any face whose solid side (face.normal) points
+   *    away from the camera — you'd be seeing it from inside the stand's
+   *    mass. This is what stops seating treads from showing "through" the
+   *    back wall at outside-looking-in angles.
+   * 3. Painter's sort: draw what survives far-to-near by camera-space depth
+   *    (projector.viewDepth of each face's centroid), so nearer faces
+   *    correctly cover farther ones — including across two DIFFERENT stands
+   *    meeting at a corner, which no per-stand draw order could ever get
+   *    right from every rotation.
+   */
+  private renderStadium() {
+    const g = this.stadiumGfx;
+    g.clear();
+    const p = this.projector;
+    const centerY = p.toIso(GRID_COLS / 2, GRID_ROWS / 2).y;
+    const fwd = p.viewForward();
+
+    const drawable: Array<{ pts: Vec2[]; depth: number; face: StandFace }> = [];
+    for (const face of stadiumFaces) {
+      const facing = face.normal.x * fwd.x + face.normal.y * fwd.y + face.normal.height * fwd.height;
+      if (facing >= 0) continue;
+      const pts = this.projectVisibleStandFace(face, centerY);
+      if (!pts) continue;
+      let cx = 0;
+      let cy = 0;
+      let ch = 0;
+      for (const c of face.corners) {
+        cx += c.x;
+        cy += c.y;
+        ch += c.height;
+      }
+      const inv = 1 / face.corners.length;
+      drawable.push({ pts, depth: p.viewDepth(cx * inv, cy * inv, ch * inv), face });
+    }
+
+    drawable.sort((a, b) => b.depth - a.depth);
+
+    for (const { pts, face } of drawable) {
+      g.fillStyle(shadeColor(standBaseColor(face.material), face.shade), 1);
+      fillPoly(g, pts);
+      // A thin dark edge between every face is what actually sells "this is
+      // a step, not a painted stripe" at a grazing viewing angle — each
+      // step's real height difference from its neighbor is tiny relative to
+      // how far the stand's length stretches across the screen, so the
+      // pixel offset alone (even with correct per-face shading) can be too
+      // small to read as depth. Stroking each face immediately after its
+      // fill (inside the sorted loop, not a second pass) matters: a nearer
+      // face's fill must be able to cover a farther face's outline.
+      g.lineStyle(STAND_EDGE_WIDTH, STAND_EDGE_COLOR, STAND_EDGE_ALPHA);
+      strokePoly(g, pts, true);
+    }
+  }
+
   private applyPawnPosition(visual: PawnVisual, gridPos: Vec2) {
     const target = this.projector.toIso(gridPos.x + 0.5, gridPos.y + 0.5);
     const moved = visual.lastGridPos.x !== gridPos.x || visual.lastGridPos.y !== gridPos.y;
@@ -765,7 +961,7 @@ export class MatchScene extends Phaser.Scene {
     if (!this.state) return;
     const { ball, ballHeight } = this.state;
     const target = this.projector.toIso(ball.pos.x + 0.5, ball.pos.y + 0.5);
-    const liftPx = BALL_GROUND_LIFT + ballHeight * BALL_HEIGHT_PX_PER_UNIT;
+    const liftPx = BALL_GROUND_LIFT + this.projector.heightOffset(ballHeight);
     const moved = this.lastBallPos.x !== ball.pos.x || this.lastBallPos.y !== ball.pos.y;
     this.lastBallPos = { ...ball.pos };
     const doMove = () => {
@@ -873,7 +1069,7 @@ export class MatchScene extends Phaser.Scene {
               // straight line — a lofted kick genuinely travels through the
               // air, so the plan preview should look like it, not just the
               // live pre-commit cross preview below.
-              strokePoly(g, arcPoints(from, to, apexHeightPx(kickDist)), false);
+              strokePoly(g, arcPoints(from, to, apexHeightPx(kickDist, p)), false);
             } else {
               g.lineBetween(from.x, from.y, to.x, to.y);
             }
@@ -959,7 +1155,7 @@ export class MatchScene extends Phaser.Scene {
         // true preview of the flight path, same spirit as the accuracy ring
         // below sampling the real landingSpread formula.
         g.lineStyle(3 / zoom, kickColor, 1);
-        strokePoly(g, arcPoints(originScreen, aimScreen, apexHeightPx(dist)), false);
+        strokePoly(g, arcPoints(originScreen, aimScreen, apexHeightPx(dist, p)), false);
         g.fillStyle(kickColor, 1);
         g.fillCircle(aimScreen.x, aimScreen.y, 7 / zoom);
 

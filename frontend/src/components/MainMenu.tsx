@@ -9,7 +9,7 @@ interface Props {
 export function MainMenu({ onStartHotseat, onStartAi, onStartSolo }: Props) {
   return (
     <div className="menu-wrapper">
-      <h1>EagleEye Interactive</h1>
+      <h1>EagleEye Studio</h1>
       <p className="menu-subtitle">Turn-based tactical soccer</p>
       <div className="menu-options">
         <button type="button" className="menu-button" onClick={onStartHotseat}>
