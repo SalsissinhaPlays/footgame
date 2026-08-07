@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { fetchPlayers } from "../../game/api";
-import { createPlayer, deletePlayer, fetchSaveTeams, transferPlayer, updatePlayer } from "../../game/careerApi";
+import { createPlayer, deletePlayer, fetchSaveTeams, fetchTeamLineup, transferPlayer, updatePlayer } from "../../game/careerApi";
+import { FORMATION_6V6_DEFAULT } from "../../game/formations";
 import type { PlayerDTO, TeamDTO } from "../../game/types";
 import { FormationEditor } from "./FormationEditor";
+import type { EditorSlot } from "./FormationEditor";
 import "./career.css";
 
 type TeamManagementPage = "attributes" | "formation";
@@ -26,11 +28,17 @@ interface Props {
 }
 
 /**
- * Two-pane replacement for the old all-attributes-in-one-editable-row grid
- * (which read as a wall of tiny boxes) — player names on the left, the
- * selected player's full attribute breakdown on the right. Only one
- * player's edit state exists at a time (keyed by selection), so switching
- * players can't leave a half-edited row's state bleeding into another.
+ * Two-pane, two-PAGE screen: player names always on the left (never
+ * remounted by paging — only its sort order and interaction set change),
+ * the right pane paged via side arrows between "Attributes" (a selected
+ * player's full attribute breakdown — the original, only page this screen
+ * had) and "Formation" (the pitch — see FormationEditor.tsx). The list is
+ * shared rather than each page owning its own, per an explicit user call:
+ * switching pages should feel like changing what you're looking AT, not
+ * navigating to a different screen — and a player's starting/bench status
+ * (this component's own `slots` state, not FormationEditor's) is relevant
+ * context on BOTH pages, not just Formation's, so starters always sort to
+ * the top of the list regardless of which page is showing.
  */
 export function TeamManagement({ saveId, teamId, onBack }: Props) {
   const [players, setPlayers] = useState<PlayerDTO[]>([]);
@@ -40,6 +48,11 @@ export function TeamManagement({ saveId, teamId, onBack }: Props) {
   const [addingPlayer, setAddingPlayer] = useState(false);
   const [page, setPage] = useState<TeamManagementPage>("attributes");
   const pageIndex = PAGES.indexOf(page);
+  // The base lineup/formation (see FormationEditor.tsx) — lives here, not in
+  // FormationEditor itself, specifically so the shared list above can read
+  // and mutate it too (right-click/drag on a list row has to reach the same
+  // state the pitch's own drag/right-click reaches).
+  const [slots, setSlots] = useState<EditorSlot[]>([]);
 
   // Defaults to true: on mount selectedId is still null, and no player ever
   // has id === null, so the fallback to list[0] below fires correctly
@@ -62,11 +75,80 @@ export function TeamManagement({ saveId, teamId, onBack }: Props) {
 
   useEffect(reload, [saveId, teamId]);
 
+  // The saved lineup only ever needs (re)loading once per team, unlike
+  // `reload` above (which also re-runs after routine player edits) — a
+  // player editing an attribute shouldn't discard in-progress, unsaved
+  // formation edits.
+  useEffect(() => {
+    fetchPlayers(teamId).then((roster) => {
+      fetchTeamLineup(teamId)
+        .then((dto) => {
+          if (dto.slots && dto.slots.length > 0) {
+            setSlots(dto.slots.map((s) => ({ position: s.position, pos: s.pos, playerId: s.playerId })));
+          } else {
+            // No saved lineup yet — default to the same shape/matching rule
+            // buildFormation's own assignSlots already uses, so an unsaved
+            // team starts from a sensible shape instead of an empty pitch.
+            const remaining = [...roster];
+            setSlots(
+              FORMATION_6V6_DEFAULT.slots.map((slot) => {
+                const matchIndex = remaining.findIndex((p) => p.position === slot.position);
+                const index = matchIndex !== -1 ? matchIndex : 0;
+                const [player] = remaining.length > 0 ? remaining.splice(index, 1) : [undefined];
+                return { position: slot.position, pos: { ...slot.pos }, playerId: player?.id ?? null };
+              })
+            );
+          }
+        })
+        .catch((e) => setError(String(e.message ?? e)));
+    });
+  }, [teamId]);
+
   const selected = players.find((p) => p.id === selectedId) ?? null;
+  const startingIds = new Set(slots.map((s) => s.playerId).filter((id): id is number => id != null));
+  // Starters first (in slot/formation order), then the rest of the roster —
+  // the "priority" ordering that's the whole point of sharing this list
+  // across both pages, so a starter never needs hunting for.
+  const sortedPlayers = [
+    ...slots.map((s) => players.find((p) => p.id === s.playerId)).filter((p): p is PlayerDTO => p != null),
+    ...players.filter((p) => !startingIds.has(p.id)),
+  ];
 
   function pageAt(offset: number): TeamManagementPage {
     const next = (pageIndex + offset + PAGES.length) % PAGES.length;
     return PAGES[next];
+  }
+
+  function vacateSlotForPlayer(playerId: number) {
+    setSlots((prev) => prev.map((s) => (s.playerId === playerId ? { ...s, playerId: null } : s)));
+  }
+
+  function fillNextOpenSlot(player: PlayerDTO) {
+    setSlots((prev) => {
+      const positionMatch = prev.findIndex((s) => s.playerId == null && s.position === player.position);
+      const index = positionMatch !== -1 ? positionMatch : prev.findIndex((s) => s.playerId == null);
+      if (index === -1) return prev; // no open slot — full squad already selected
+      return prev.map((s, i) => (i === index ? { ...s, playerId: player.id } : s));
+    });
+  }
+
+  function swapIntoSlot(targetPlayerId: number, incoming: PlayerDTO) {
+    setSlots((prev) => prev.map((s) => (s.playerId === targetPlayerId ? { ...s, playerId: incoming.id } : s)));
+  }
+
+  function repositionSlot(playerId: number, point: { x: number; y: number }) {
+    setSlots((prev) => prev.map((s) => (s.playerId === playerId ? { ...s, pos: point } : s)));
+  }
+
+  function handleDragOverAllow(e: React.DragEvent) {
+    e.preventDefault();
+  }
+
+  function readDraggedPlayerId(e: React.DragEvent): PlayerDTO | null {
+    const id = Number(e.dataTransfer.getData("text/player-id"));
+    if (!id) return null;
+    const player = players.find((p) => p.id === id);
+    return player && !startingIds.has(id) ? player : null;
   }
 
   return (
@@ -94,38 +176,72 @@ export function TeamManagement({ saveId, teamId, onBack }: Props) {
       </div>
 
       {error && <p className="career-error">{error}</p>}
+      {page === "formation" && (
+        <p className="career-muted">
+          {startingIds.size}/{slots.length} selected. Drag a bench name onto the pitch to bring them on, or onto a
+          starter to swap directly. Right-click toggles a player on/off the pitch. Drag an on-pitch player to
+          reposition them.
+        </p>
+      )}
 
-      {page === "attributes" ? (
-        <div className="career-team-mgmt">
-          <div className="career-team-mgmt-list">
-            {players.map((p) => (
+      <div className="career-team-mgmt">
+        <div className="career-team-mgmt-list">
+          {sortedPlayers.map((p) => {
+            const isStarting = startingIds.has(p.id);
+            const isFormationPage = page === "formation";
+            return (
               <button
                 key={p.id}
                 type="button"
-                className={`career-team-mgmt-list-item${p.id === selectedId ? " selected" : ""}`}
-                onClick={() => setSelectedId(p.id)}
+                className={`career-team-mgmt-list-item${isStarting ? " starting" : ""}${!isFormationPage && p.id === selectedId ? " selected" : ""}`}
+                onClick={isFormationPage ? undefined : () => setSelectedId(p.id)}
+                draggable={isFormationPage && !isStarting}
+                onDragStart={
+                  isFormationPage && !isStarting ? (e) => e.dataTransfer.setData("text/player-id", String(p.id)) : undefined
+                }
+                onDragOver={isFormationPage && isStarting ? handleDragOverAllow : undefined}
+                onDrop={
+                  isFormationPage && isStarting
+                    ? (e) => {
+                        e.preventDefault();
+                        const incoming = readDraggedPlayerId(e);
+                        if (incoming) swapIntoSlot(p.id, incoming);
+                      }
+                    : undefined
+                }
+                onContextMenu={
+                  isFormationPage
+                    ? (e) => {
+                        e.preventDefault();
+                        if (isStarting) vacateSlotForPlayer(p.id);
+                        else fillNextOpenSlot(p);
+                      }
+                    : undefined
+                }
               >
                 <span className="career-team-mgmt-list-pos">{p.position}</span>
                 <span className="career-team-mgmt-list-name">
                   #{p.jersey_number} {p.name}
                 </span>
               </button>
-            ))}
-            <button type="button" className="career-team-mgmt-list-add" onClick={() => setAddingPlayer((v) => !v)}>
-              {addingPlayer ? "Cancel" : "+ Add player"}
-            </button>
-            {addingPlayer && (
-              <NewPlayerForm
-                teamId={teamId}
-                onCreated={() => {
-                  setAddingPlayer(false);
-                  reload(false);
-                }}
-                onError={setError}
-              />
-            )}
-          </div>
+            );
+          })}
+          <button type="button" className="career-team-mgmt-list-add" onClick={() => setAddingPlayer((v) => !v)}>
+            {addingPlayer ? "Cancel" : "+ Add player"}
+          </button>
+          {addingPlayer && (
+            <NewPlayerForm
+              teamId={teamId}
+              onCreated={() => {
+                setAddingPlayer(false);
+                reload(false);
+              }}
+              onError={setError}
+            />
+          )}
+        </div>
 
+        {page === "attributes" ? (
           <div className="career-team-mgmt-detail">
             {selected ? (
               <PlayerDetail
@@ -140,10 +256,17 @@ export function TeamManagement({ saveId, teamId, onBack }: Props) {
               <p className="career-empty">No players yet — add one on the left.</p>
             )}
           </div>
-        </div>
-      ) : (
-        <FormationEditor teamId={teamId} />
-      )}
+        ) : (
+          <FormationEditor
+            teamId={teamId}
+            players={players}
+            slots={slots}
+            onReposition={repositionSlot}
+            onVacate={vacateSlotForPlayer}
+            onFillNextOpenSlot={fillNextOpenSlot}
+          />
+        )}
+      </div>
     </div>
   );
 }

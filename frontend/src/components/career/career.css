@@ -690,74 +690,23 @@
   background: #2e7d32;
 }
 
-.career-formation-editor {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
+/* The shared roster list (career-team-mgmt-list-item, see the Team
+   Management section above) grows a "starting" modifier for the Formation
+   page's own list-row interactions (draggable bench rows, drop targets on
+   starter rows, right-click on either). This rule is defined AFTER
+   .selected above (same specificity — two classes each), so without the
+   explicit .starting.selected override just below, a starter who's also
+   the Attributes page's currently-edited player would show THIS lighter
+   border color instead of .selected's — the override restates .selected's
+   own values at higher specificity so "currently editing" always visually
+   wins over "is a starter." */
+.career-team-mgmt-list-item.starting {
+  border-left: 3px solid #a5d6a7;
+  padding-left: 9px;
 }
 
-.career-formation-roster {
-  width: 260px;
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.career-formation-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: default;
-}
-
-.career-formation-row.starter {
-  background: #e8f5e9;
-  border-color: #a5d6a7;
-}
-
-.career-formation-row.empty {
-  background: #fafafa;
-  border-style: dashed;
-}
-
-.career-formation-row.bench {
-  background: #fff;
-  cursor: grab;
-}
-
-.career-formation-row.bench:active {
-  cursor: grabbing;
-}
-
-.career-formation-row.bench:hover {
-  background: #f6f6f6;
-}
-
-.career-formation-pos {
-  font-size: 11px;
-  font-weight: 700;
-  color: #888;
-  width: 28px;
-  flex: 0 0 auto;
-}
-
-.career-formation-name {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.career-formation-bench-label {
-  margin: 8px 0 2px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.career-team-mgmt-list-item.starting.selected {
+  border-left: 3px solid #2e7d32;
 }
 
 .career-formation-pitch-col {
