@@ -440,37 +440,6 @@
   margin-top: 20px;
 }
 
-/* --- Tactics sliders --- */
-
-.career-tactics-sliders {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  max-width: 480px;
-}
-
-.career-tactic-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.career-tactic-label {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.career-tactic-row input[type="range"] {
-  width: 100%;
-}
-
-.career-tactic-endpoints {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: #888;
-}
-
 /* --- Managers --- */
 
 .career-firings-banner {

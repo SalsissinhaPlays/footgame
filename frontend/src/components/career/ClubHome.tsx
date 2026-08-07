@@ -8,7 +8,6 @@ interface Props {
   saveId: number;
   onOpenCalendar: (leagueId: number) => void;
   onOpenTeamManagement: (teamId: number) => void;
-  onOpenTactics: (teamId: number) => void;
   onOpenManagers: () => void;
   /**
    * Launches the fixture as a real interactive match — see Career.tsx's
@@ -39,7 +38,6 @@ export function ClubHome({
   saveId,
   onOpenCalendar,
   onOpenTeamManagement,
-  onOpenTactics,
   onOpenManagers,
   onPlayFixture,
   onSave,
@@ -177,14 +175,6 @@ export function ClubHome({
           onClick={() => userTeamId != null && onOpenTeamManagement(userTeamId)}
         >
           Team Management
-        </button>
-        <button
-          type="button"
-          className="career-home-button"
-          disabled={userTeamId == null}
-          onClick={() => userTeamId != null && onOpenTactics(userTeamId)}
-        >
-          Tactics
         </button>
         <button type="button" className="career-home-button" onClick={onOpenManagers}>
           Managers

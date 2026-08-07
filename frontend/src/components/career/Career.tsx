@@ -12,7 +12,6 @@ import { ClubHome } from "./ClubHome";
 import { TeamManagement } from "./TeamManagement";
 import { Calendar } from "./Calendar";
 import { LineupSelect } from "./LineupSelect";
-import { TeamTactics } from "./TeamTactics";
 import { Managers } from "./Managers";
 
 /**
@@ -39,7 +38,6 @@ type CareerScreen =
   | { name: "teamPreview"; save: SaveDTO; team: TeamDTO }
   | { name: "clubHome"; saveId: number }
   | { name: "teamManagement"; saveId: number; teamId: number }
-  | { name: "tactics"; saveId: number; teamId: number }
   | { name: "managers"; saveId: number }
   | { name: "calendar"; saveId: number; leagueId: number }
   | { name: "lineup"; saveId: number; leagueId: number; fixture: FixtureDTO; userTeamId: number; opponentName: string }
@@ -119,7 +117,6 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
           saveId={screen.saveId}
           onOpenCalendar={(leagueId) => setScreen({ name: "calendar", saveId: screen.saveId, leagueId })}
           onOpenTeamManagement={(teamId) => setScreen({ name: "teamManagement", saveId: screen.saveId, teamId })}
-          onOpenTactics={(teamId) => setScreen({ name: "tactics", saveId: screen.saveId, teamId })}
           onOpenManagers={() => setScreen({ name: "managers", saveId: screen.saveId })}
           onPlayFixture={(fixture, leagueId, userTeamId, opponentName) =>
             setScreen({ name: "lineup", saveId: screen.saveId, leagueId, fixture, userTeamId, opponentName })
@@ -135,10 +132,6 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
           teamId={screen.teamId}
           onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })}
         />
-      );
-    case "tactics":
-      return (
-        <TeamTactics teamId={screen.teamId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />
       );
     case "managers":
       return (
@@ -168,39 +161,29 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
       const { saveId, leagueId, fixture, userTeamId, startingPlayerIds } = screen;
       const backToClubHome = () => setScreen({ name: "clubHome", saveId });
       // A fixture's home_team_id/away_team_id reflect the round-robin
-      // schedule, not who's human-controlled — Game.tsx's mode="ai" always
-      // makes the human control "home", so the user's own team has to be
-      // loaded as "home" here regardless of which side the fixture lists
-      // it on, or the player would end up controlling their opponent in
-      // any fixture where the schedule put their team away (roughly half
-      // of them). Scores get mapped back to the fixture's REAL home/away
-      // before recording, since the fixtures table (and simulate-round,
-      // and standings) don't know or care which side the human played.
-      const userIsAway = fixture.away_team_id === userTeamId;
-      const humanTeamId = userIsAway ? fixture.away_team_id : fixture.home_team_id;
-      const aiTeamId = userIsAway ? fixture.home_team_id : fixture.away_team_id;
+      // schedule — a real season plays every opponent once at home and once
+      // away, so the human should genuinely experience both, not always be
+      // forced into "home" (that was an earlier design, since reworked:
+      // Game.tsx now takes an explicit humanSide prop instead of assuming
+      // the human is always "home"). Passing the fixture's teams straight
+      // through means homeScore/awayScore already line up with the
+      // fixture's own home_score/away_score with no remapping needed.
+      const humanSide = fixture.away_team_id === userTeamId ? "away" : "home";
       return (
         <Game
           mode="ai"
-          homeTeamId={humanTeamId}
-          awayTeamId={aiTeamId}
-          homeStartingPlayerIds={startingPlayerIds}
+          homeTeamId={fixture.home_team_id}
+          awayTeamId={fixture.away_team_id}
+          humanSide={humanSide}
+          humanStartingPlayerIds={startingPlayerIds}
           onExitToMenu={backToClubHome}
           isFullscreen={isFullscreen}
           onToggleFullscreen={onToggleFullscreen}
           onCareerMatchEnd={async (homeScore, awayScore, scorers) => {
-            const fixtureHomeScore = userIsAway ? awayScore : homeScore;
-            const fixtureAwayScore = userIsAway ? homeScore : awayScore;
             // player_id is side-agnostic (a scorer's team is derived from
             // players.team_id at query time — see the backend's
-            // fixture_goals comment), so unlike the score fields above,
-            // this list needs no home/away remapping.
-            await recordResult(
-              fixture.id,
-              fixtureHomeScore,
-              fixtureAwayScore,
-              scorers.map((s) => s.playerId)
-            );
+            // fixture_goals comment).
+            await recordResult(fixture.id, homeScore, awayScore, scorers.map((s) => s.playerId));
             // The player's own fixture is now scored, so this only ever
             // touches the OTHER clubs' still-unplayed fixtures in the same
             // round (see backend's simulate-round comment) — that's what

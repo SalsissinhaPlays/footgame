@@ -200,7 +200,7 @@ interface MatchState {
   scorers: GoalScorer[];
 }
 
-function initialMatchState(): MatchState {
+function initialMatchState(humanSide: Side): MatchState {
   return {
     pawns: [],
     ball: { pos: BALL_START },
@@ -208,7 +208,7 @@ function initialMatchState(): MatchState {
     turn: 1,
     homeScore: 0,
     awayScore: 0,
-    controllingSide: "home",
+    controllingSide: humanSide,
     readySides: new Set(),
     pendingRestart: null,
     restartSetup: null,
@@ -224,18 +224,32 @@ interface Props {
   /**
    * Career mode only: load these specific teams' real rosters instead of
    * the default demo teams fetchTeams() always returns. Both or neither —
-   * there's no meaningful "one real team, one demo team" case.
+   * there's no meaningful "one real team, one demo team" case. These are
+   * the fixture's REAL home/away designation — unlike the earlier design,
+   * the human is not forced into "home" anymore (see humanSide below).
    */
   homeTeamId?: number;
   awayTeamId?: number;
   /**
-   * Career mode only: exactly which of the home roster's players actually
+   * Career mode only ("ai" mode's default is "home", preserving the
+   * non-career "Play against AI" menu option's behavior unchanged): which
+   * pitch side the human actually plays. A league fixture is home for one
+   * team and away for the other regardless of who's human-controlled — a
+   * real season alternates roughly 50/50, and always forcing the human into
+   * "home" (the previous design) meant the away-kit/away-perspective side of
+   * the game never happened, and would silently break any future mechanic
+   * keyed off home/away (e.g. a home-advantage bonus). The AI always takes
+   * whichever side isn't humanSide.
+   */
+  humanSide?: Side;
+  /**
+   * Career mode only: exactly which of the human's roster players actually
    * take the pitch — see Career.tsx's LineupSelect screen. When omitted,
    * buildFormation's own fallback applies (the roster's first players in
    * jersey_number order, per position). Only ever meaningful for the human
    * side — the AI opponent doesn't get a lineup choice.
    */
-  homeStartingPlayerIds?: number[];
+  humanStartingPlayerIds?: number[];
   /**
    * Career mode only: renders an "End Match & Record Result" button that
    * calls this with the current score instead of just exiting. Matches here
@@ -276,11 +290,17 @@ export function Game({
   onExitToMenu,
   homeTeamId,
   awayTeamId,
-  homeStartingPlayerIds,
+  humanSide: humanSideProp,
+  humanStartingPlayerIds,
   onCareerMatchEnd,
   isFullscreen,
   onToggleFullscreen,
 }: Props) {
+  // Defaults to "home" for every non-career caller (hotseat/solo/the plain
+  // "Play against AI" menu option never pass humanSide) — only Career.tsx's
+  // match screen ever passes "away", matching a fixture's real designation.
+  const humanSide: Side = humanSideProp ?? "home";
+  const aiSide: Side = humanSide === "home" ? "away" : "home";
   const sceneRef = useRef<MatchScene | null>(null);
   const handlersRef = useRef<MatchCallbacks>({
     onPawnClick: () => {},
@@ -350,7 +370,7 @@ export function Game({
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   // The match's shared truth — see MatchState's own doc comment above for
   // what belongs here vs. in the standalone UI hooks below.
-  const [match, setMatch] = useState<MatchState>(initialMatchState());
+  const [match, setMatch] = useState<MatchState>(() => initialMatchState(humanSide));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [kickMode, setKickMode] = useState(false);
   const [kickLoft, setKickLoft] = useState(false);
@@ -396,10 +416,12 @@ export function Game({
   // replace. Mirrors pickingMarkTarget's own "arm a mode, then click the
   // target on the pitch" shape.
   const [subReplacement, setSubReplacement] = useState<PlayerDTO | null>(null);
-  // The away team's saved tactical identity (see TeamTactics.tsx) — a team
-  // with no saved row just plays under this same default, so this state
-  // never needs a "not loaded yet" distinction from "genuinely default."
-  const [awayTacticalProfile, setAwayTacticalProfile] = useState<TacticalProfile>(DEFAULT_TACTICAL_PROFILE);
+  // The AI-controlled side's saved tactical identity (see TeamTactics.tsx)
+  // — a team with no saved row just plays under this same default, so this
+  // state never needs a "not loaded yet" distinction from "genuinely
+  // default." Whichever side that is depends on humanSide/aiSide, not a
+  // fixed "away" — see the load effect below.
+  const [aiTacticalProfile, setAiTacticalProfile] = useState<TacticalProfile>(DEFAULT_TACTICAL_PROFILE);
 
   useEffect(() => {
     async function load() {
@@ -413,24 +435,30 @@ export function Game({
       const homePlayers = await fetchPlayers(home.id);
       const awayPlayers = await fetchPlayers(away.id);
       setTeams([home, away]);
-      fetchTeamTactics(away.id)
-        .then((dto) => setAwayTacticalProfile(toTacticalProfile(dto)))
-        .catch(() => setAwayTacticalProfile(DEFAULT_TACTICAL_PROFILE));
+      const aiTeamId = aiSide === "home" ? home.id : away.id;
+      fetchTeamTactics(aiTeamId)
+        .then((dto) => setAiTacticalProfile(toTacticalProfile(dto)))
+        .catch(() => setAiTacticalProfile(DEFAULT_TACTICAL_PROFILE));
       // A career lineup choice (LineupSelect) filters the roster down to
       // exactly the chosen starters before it ever reaches buildFormation —
       // whoever isn't in this list simply never becomes a pawn, same as any
       // other roster surplus (see formation.ts's assignSlots). Falls back to
       // the full roster (buildFormation's own default ordering) whenever no
       // lineup was chosen, e.g. hotseat/AI/solo modes that never pass this.
-      const startingHomePlayers =
-        homeStartingPlayerIds && homeStartingPlayerIds.length > 0
-          ? homePlayers.filter((p) => homeStartingPlayerIds.includes(p.id))
-          : homePlayers;
-      const homeFormation = buildFormation(startingHomePlayers, "home");
-      const awayFormation = buildFormation(awayPlayers, "away");
+      // Applies to whichever side is humanSide, not always "home" — the AI
+      // side never gets a lineup choice regardless of which pitch side it's on.
+      const humanRoster = humanSide === "home" ? homePlayers : awayPlayers;
+      const startingHumanPlayers =
+        humanStartingPlayerIds && humanStartingPlayerIds.length > 0
+          ? humanRoster.filter((p) => humanStartingPlayerIds.includes(p.id))
+          : humanRoster;
+      const finalHomePlayers = humanSide === "home" ? startingHumanPlayers : homePlayers;
+      const finalAwayPlayers = humanSide === "away" ? startingHumanPlayers : awayPlayers;
+      const homeFormation = buildFormation(finalHomePlayers, "home");
+      const awayFormation = buildFormation(finalAwayPlayers, "away");
       setBenchedPlayers(
-        homeStartingPlayerIds && homeStartingPlayerIds.length > 0
-          ? homePlayers.filter((p) => !homeStartingPlayerIds.includes(p.id))
+        humanStartingPlayerIds && humanStartingPlayerIds.length > 0
+          ? humanRoster.filter((p) => !humanStartingPlayerIds.includes(p.id))
           : []
       );
       // Coin toss for the match's TRUE opening kickoff only — resolve.ts's
@@ -457,14 +485,14 @@ export function Game({
       setLoading(false);
     }
     load();
-    // homeTeamId/awayTeamId/homeStartingPlayerIds only ever change across a
-    // full unmount/remount (Career.tsx's screen switch always passes
-    // through a non-"match" screen in between two different fixtures — see
-    // Career.tsx), never as a live prop update on an already-mounted Game,
-    // so including them here doesn't introduce a real re-fetch risk
-    // mid-match; it's just what satisfies exhaustive-deps honestly instead
-    // of suppressing it.
-  }, [homeTeamId, awayTeamId, homeStartingPlayerIds]);
+    // homeTeamId/awayTeamId/humanSide/humanStartingPlayerIds only ever
+    // change across a full unmount/remount (Career.tsx's screen switch
+    // always passes through a non-"match" screen in between two different
+    // fixtures — see Career.tsx), never as a live prop update on an
+    // already-mounted Game, so including them here doesn't introduce a real
+    // re-fetch risk mid-match; it's just what satisfies exhaustive-deps
+    // honestly instead of suppressing it.
+  }, [homeTeamId, awayTeamId, humanSide, aiSide, humanStartingPlayerIds]);
 
   // WASD pans the camera (screen-relative: W/S move the view up/down, A/D
   // left/right). The delta itself is still applied in view-space, same as
@@ -703,11 +731,11 @@ export function Game({
       handleFieldClick(pawn.pos);
       return;
     }
-    // Substitution target: the next home-side pawn clicked is who the
-    // armed bench player replaces. Gated on "home" specifically, not
+    // Substitution target: the next human-side pawn clicked is who the
+    // armed bench player replaces. Gated on humanSide specifically, not
     // match.controllingSide — a bench only ever exists for the human's own
     // career-mode team (see benchedPlayers above), regardless of mode.
-    if (subReplacement && pawn.side === "home") {
+    if (subReplacement && pawn.side === humanSide) {
       performSubstitution(pawn, subReplacement);
       return;
     }
@@ -1150,7 +1178,7 @@ export function Game({
         restartSetup: turnsRemaining > 0 ? { ...restartSetup, turnsRemaining } : null,
         turn: prev.turn + 1,
         readySides: new Set(),
-        controllingSide: "home",
+        controllingSide: humanSide,
         resolving: false,
       }));
       return;
@@ -1250,8 +1278,8 @@ export function Game({
       const humanControlsRestart =
         deadBall.type !== "penalty" &&
         (mode === "hotseat" ||
-          (mode === "ai" && deadBall.side === "home") ||
-          (mode === "solo" && deadBall.side === "home"));
+          (mode === "ai" && deadBall.side === humanSide) ||
+          (mode === "solo" && deadBall.side === humanSide));
       if (humanControlsRestart) setMatch((prev) => ({ ...prev, pendingRestart: deadBall }));
     }
 
@@ -1259,7 +1287,7 @@ export function Game({
       ...prev,
       turn: prev.turn + 1,
       readySides: new Set(),
-      controllingSide: "home",
+      controllingSide: humanSide,
       resolving: false,
     }));
   }
@@ -1279,18 +1307,21 @@ export function Game({
   }
 
   // Both only ever act on the CURRENT corner's setup (match.restartSetup),
-  // and only ever for "home" — see the Tactics/corner-preset buttons' own
-  // gating below for why (a saved preset only makes sense for a team's own
-  // attacking corner, never a defensive setup).
+  // and only ever for the human's own side — see the Tactics/corner-preset
+  // buttons' own gating below for why (a saved preset only makes sense for
+  // a team's own attacking corner, never a defensive setup). Uses the
+  // human's real team id (whichever of teams[0]/teams[1] that is), not
+  // always teams[0] — a preset belongs to the player's club, not to
+  // whichever pitch side they happened to be on this particular fixture.
   async function handleSaveCornerPreset() {
     const restartSetup = match.restartSetup;
-    const homeTeamId = teams[0]?.id;
-    if (!restartSetup || !homeTeamId) return;
+    const humanTeamId = humanSide === "home" ? teams[0]?.id : teams[1]?.id;
+    if (!restartSetup || !humanTeamId) return;
     const offsets = match.pawns
-      .filter((p) => p.side === "home")
+      .filter((p) => p.side === humanSide)
       .map((p) => cornerPresetOffset(p.pos, restartSetup.deadBall));
     try {
-      await saveCornerPreset(homeTeamId, offsets);
+      await saveCornerPreset(humanTeamId, offsets);
     } catch {
       // Best-effort — no dedicated error UI for this yet, matching the
       // low-stakes nature of a convenience preset (worst case, the player
@@ -1300,16 +1331,16 @@ export function Game({
 
   async function handleApplyCornerPreset() {
     const restartSetup = match.restartSetup;
-    const homeTeamId = teams[0]?.id;
-    if (!restartSetup || !homeTeamId) return;
+    const humanTeamId = humanSide === "home" ? teams[0]?.id : teams[1]?.id;
+    if (!restartSetup || !humanTeamId) return;
     try {
-      const { offsets } = await fetchCornerPreset(homeTeamId);
+      const { offsets } = await fetchCornerPreset(humanTeamId);
       if (!offsets || offsets.length === 0) return;
       const deadBall = restartSetup.deadBall;
       setMatch((prev) => {
-        const homePawns = prev.pawns.filter((p) => p.side === "home");
+        const humanPawns = prev.pawns.filter((p) => p.side === humanSide);
         const offsetById = new Map(
-          homePawns.map((p, i) => [p.id, offsets[i]] as const).filter((entry): entry is [string, CornerOffset] => entry[1] !== undefined)
+          humanPawns.map((p, i) => [p.id, offsets[i]] as const).filter((entry): entry is [string, CornerOffset] => entry[1] !== undefined)
         );
         return {
           ...prev,
@@ -1336,7 +1367,7 @@ export function Game({
     setPlacingPawnSide(null);
 
     if (mode === "ai") {
-      const withAiMoves = planAiTurn(match.pawns, match.ball, "away", awayTacticalProfile);
+      const withAiMoves = planAiTurn(match.pawns, match.ball, aiSide, aiTacticalProfile);
       await resolveWithPawns(withAiMoves);
       return;
     }
@@ -1345,8 +1376,9 @@ export function Game({
       // The Team Management sandbox's AI toggle — off by default (matching
       // solo's original "away never gets a plan" meaning), on demand when
       // the player wants to see how their custom roster actually plays
-      // against the AI instead of just standing still.
-      const pawnsForTurn = awayAiEnabled ? planAiTurn(match.pawns, match.ball, "away", awayTacticalProfile) : match.pawns;
+      // against the AI instead of just standing still. Solo never sets
+      // humanSide, so aiSide is always "away" here, unchanged from before.
+      const pawnsForTurn = awayAiEnabled ? planAiTurn(match.pawns, match.ball, aiSide, aiTacticalProfile) : match.pawns;
       await resolveWithPawns(pawnsForTurn);
       return;
     }
@@ -1412,7 +1444,7 @@ export function Game({
   const controllingSideName = match.controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
 
   return (
-    <div className="game-wrapper">
+    <div className={`game-wrapper ${isFullscreen ? "is-fullscreen" : ""}`}>
       <div className="hud">
         <div className="hud-top-row">
           <div className="hud-top-left">
@@ -1476,7 +1508,7 @@ export function Game({
               <div className="hud-banner">
                 Setting up for a {RESTART_TYPE_LABEL[match.restartSetup.deadBall.type].toLowerCase()} —{" "}
                 {match.restartSetup.turnsRemaining} turn{match.restartSetup.turnsRemaining > 1 ? "s" : ""} left
-                {match.restartSetup.deadBall.type === "corner" && match.restartSetup.deadBall.side === "home" && (
+                {match.restartSetup.deadBall.type === "corner" && match.restartSetup.deadBall.side === humanSide && (
                   <span className="corner-preset-actions">
                     <button type="button" className="corner-preset-btn" onClick={handleApplyCornerPreset}>
                       Apply my preset

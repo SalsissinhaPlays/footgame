@@ -253,30 +253,8 @@ export function toTacticalProfile(dto: TeamTacticsDTO): TacticalProfile {
   };
 }
 
-function fromTacticalProfile(profile: TacticalProfile): Omit<TeamTacticsDTO, "team_id"> {
-  return {
-    defensive_line_depth_frac: profile.defensiveLineDepthFrac,
-    pressing_trigger_distance_mult: profile.pressingTriggerDistanceMult,
-    marking_coverage_frac: profile.markingCoverageFrac,
-    attacking_commitment_frac: profile.attackingCommitmentFrac,
-    supporting_run_depth_mult: profile.supportingRunDepthMult,
-    shooting_range_mult: profile.shootingRangeMult,
-    pass_risk_tolerance: profile.passRiskTolerance,
-    cross_bias: profile.crossBias,
-    sprint_aggressiveness: profile.sprintAggressiveness,
-  };
-}
-
 export function fetchTeamTactics(teamId: number): Promise<TeamTacticsDTO> {
   return fetch(`${API_BASE}/teams/${teamId}/tactics`).then(json<TeamTacticsDTO>);
-}
-
-export function updateTeamTactics(teamId: number, profile: TacticalProfile): Promise<TeamTacticsDTO> {
-  return fetch(`${API_BASE}/teams/${teamId}/tactics`, {
-    method: "PUT",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(fromTacticalProfile(profile)),
-  }).then(json<TeamTacticsDTO>);
 }
 
 // --- Corner-kick presets ---
