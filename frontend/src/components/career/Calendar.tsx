@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchFixtures, fetchLeagueTeams, fetchStandings } from "../../game/careerApi";
-import type { FixtureDTO, StandingRow } from "../../game/careerTypes";
+import { fetchFixtures, fetchLeagueTeams, fetchStandings, fetchTopScorers } from "../../game/careerApi";
+import type { FixtureDTO, StandingRow, TopScorerRow } from "../../game/careerTypes";
 import type { TeamDTO } from "../../game/types";
 import "./career.css";
 
@@ -22,6 +22,7 @@ export function Calendar({ leagueId, onBack }: Props) {
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [fixtures, setFixtures] = useState<FixtureDTO[]>([]);
   const [standings, setStandings] = useState<StandingRow[]>([]);
+  const [topScorers, setTopScorers] = useState<TopScorerRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -33,6 +34,9 @@ export function Calendar({ leagueId, onBack }: Props) {
       .catch((e) => setError(String(e.message ?? e)));
     fetchStandings(leagueId)
       .then(setStandings)
+      .catch((e) => setError(String(e.message ?? e)));
+    fetchTopScorers(leagueId)
+      .then(setTopScorers)
       .catch((e) => setError(String(e.message ?? e)));
   }, [leagueId]);
 
@@ -93,6 +97,36 @@ export function Calendar({ leagueId, onBack }: Props) {
                   <td>{r.goal_difference}</td>
                   <td>
                     <strong>{r.points}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="career-section">
+        <h2>Top Scorers</h2>
+        {topScorers.length === 0 ? (
+          <p className="career-empty">
+            No goals on record yet — only shows goals from matches you've actually played (not the auto-simmed ones).
+          </p>
+        ) : (
+          <table className="career-standings-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Team</th>
+                <th>Goals</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topScorers.map((r) => (
+                <tr key={r.player_id}>
+                  <td>{r.player_name}</td>
+                  <td>{r.team_name}</td>
+                  <td>
+                    <strong>{r.goals}</strong>
                   </td>
                 </tr>
               ))}

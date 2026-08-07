@@ -8,8 +8,20 @@ interface Props {
   saveId: number;
   onOpenCalendar: (leagueId: number) => void;
   onOpenTeamManagement: (teamId: number) => void;
-  /** Launches the fixture as a real interactive match — see Career.tsx's "match" screen. */
-  onPlayFixture: (fixture: FixtureDTO, leagueId: number) => void;
+  onOpenTactics: (teamId: number) => void;
+  /**
+   * Launches the fixture as a real interactive match — see Career.tsx's
+   * "match" screen. Passes the user's own team id too: a fixture's
+   * home_team_id/away_team_id reflect the round-robin schedule, not who's
+   * human-controlled, and roughly half of a season's fixtures list the
+   * player's team as away — Career.tsx needs to know which one is really
+   * theirs to make sure the human always ends up controlling their own
+   * club, not whichever side the schedule happened to list first. Also
+   * passes the opponent's display name — ClubHome already has the full
+   * team list loaded, so the next screen (lineup selection) doesn't need
+   * its own redundant fetch just to show "vs Crimson City".
+   */
+  onPlayFixture: (fixture: FixtureDTO, leagueId: number, userTeamId: number, opponentName: string) => void;
   onSave: () => void;
   onExit: () => void;
 }
@@ -22,7 +34,15 @@ interface Props {
  * is what fixes the earlier bug where any fixture (not just the player's
  * own) could be launched from League Detail's fixture list.
  */
-export function ClubHome({ saveId, onOpenCalendar, onOpenTeamManagement, onPlayFixture, onSave, onExit }: Props) {
+export function ClubHome({
+  saveId,
+  onOpenCalendar,
+  onOpenTeamManagement,
+  onOpenTactics,
+  onPlayFixture,
+  onSave,
+  onExit,
+}: Props) {
   const [save, setSave] = useState<SaveDTO | null>(null);
   const [league, setLeague] = useState<LeagueDTO | null>(null);
   const [fixtures, setFixtures] = useState<FixtureDTO[]>([]);
@@ -110,7 +130,17 @@ export function ClubHome({ saveId, onOpenCalendar, onOpenTeamManagement, onPlayF
             type="button"
             className="career-home-button"
             disabled={!nextMatch || !league}
-            onClick={() => nextMatch && league && onPlayFixture(nextMatch, league.id)}
+            onClick={() =>
+              nextMatch &&
+              league &&
+              userTeamId != null &&
+              onPlayFixture(
+                nextMatch,
+                league.id,
+                userTeamId,
+                teamName(nextMatch.home_team_id === userTeamId ? nextMatch.away_team_id : nextMatch.home_team_id)
+              )
+            }
           >
             {nextMatch ? `Next Match: ${teamName(nextMatch.home_team_id)} vs ${teamName(nextMatch.away_team_id)}` : "Next Match"}
           </button>
@@ -126,6 +156,14 @@ export function ClubHome({ saveId, onOpenCalendar, onOpenTeamManagement, onPlayF
           onClick={() => userTeamId != null && onOpenTeamManagement(userTeamId)}
         >
           Team Management
+        </button>
+        <button
+          type="button"
+          className="career-home-button"
+          disabled={userTeamId == null}
+          onClick={() => userTeamId != null && onOpenTactics(userTeamId)}
+        >
+          Tactics
         </button>
         <button type="button" className="career-home-button career-home-button-secondary" onClick={onSave}>
           Save

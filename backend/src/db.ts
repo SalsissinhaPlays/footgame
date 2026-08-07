@@ -88,6 +88,61 @@ db.exec(`
     away_score INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- One row per identified goal. Only ever populated for a fixture the
+  -- player actually played interactively (resolve.ts's GoalScorer) — a
+  -- quick-simmed fixture (quickSim.ts) only ever produces an aggregate
+  -- score, so it never gets rows here. No team_id column: a scorer's team
+  -- is derived from players.team_id at query time (see the top-scorers
+  -- endpoint) rather than snapshotted here, which is simpler and accurate
+  -- as long as top-scorer stats aren't expected to survive a player's
+  -- transfer to a different club mid-season — an acceptable gap for now.
+  CREATE TABLE IF NOT EXISTS fixture_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fixture_id INTEGER NOT NULL REFERENCES fixtures(id) ON DELETE CASCADE,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One row per team, at most — a team with no row here just plays under
+  -- frontend/src/game/tacticalProfile.ts's DEFAULT_TACTICAL_PROFILE (the
+  -- backend's own DEFAULT_TACTICS mirrors those same numbers, see
+  -- index.ts). Deliberately no auto-provisioned row per team on save
+  -- creation: "missing row = defaults" means every already-existing team
+  -- (including every save created before this table existed) already
+  -- behaves correctly with zero migration/backfill needed. team_id is the
+  -- primary key rather than a separate autoincrement id specifically to
+  -- make the write side a plain upsert (INSERT ... ON CONFLICT DO UPDATE),
+  -- not a read-modify-write.
+  CREATE TABLE IF NOT EXISTS team_tactics (
+    team_id INTEGER PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+    defensive_line_depth_frac REAL NOT NULL DEFAULT 0.4,
+    pressing_trigger_distance_mult REAL NOT NULL DEFAULT 1.0,
+    marking_coverage_frac REAL NOT NULL DEFAULT 0.5,
+    attacking_commitment_frac REAL NOT NULL DEFAULT 0.5,
+    supporting_run_depth_mult REAL NOT NULL DEFAULT 0.25,
+    shooting_range_mult REAL NOT NULL DEFAULT 1.0,
+    pass_risk_tolerance REAL NOT NULL DEFAULT 0.5,
+    cross_bias REAL NOT NULL DEFAULT 0.4,
+    sprint_aggressiveness REAL NOT NULL DEFAULT 0.5
+  );
+
+  -- A saved corner-kick setup: where this team likes its own pawns
+  -- positioned when IT is the one taking a corner (never for defending
+  -- one — a defensive setup depends on the opponent's own shape, which
+  -- isn't something a flat preset can usefully capture). offsets is a JSON
+  -- array of { alongAttack, alongTouch } — a corner-relative coordinate
+  -- frame (not raw world x/y) so the exact same preset correctly re-applies
+  -- at either of the team's two attacking corners, and regardless of
+  -- whether the team is playing home or away in a given match. See
+  -- Game.tsx's cornerPresetOffset/applyCornerPreset for the transform.
+  -- Free-kicks are deliberately NOT covered here: a foul's location varies
+  -- continuously across the whole pitch, so a single flat preset wouldn't
+  -- generalize the way it does for a corner's fixed, small set of spots.
+  CREATE TABLE IF NOT EXISTS team_corner_presets (
+    team_id INTEGER PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+    offsets TEXT NOT NULL
+  );
 `);
 
 // CREATE TABLE IF NOT EXISTS is a no-op against a DB that already exists on

@@ -141,10 +141,29 @@ export interface ResolveSnapshot {
   events: string[];
 }
 
+/** Who scored — attached at each of the three places a goal can happen (see ResolveResult.scorer). */
+export interface GoalScorer {
+  side: Side;
+  pawnId: string;
+  playerId: number;
+  playerName: string;
+}
+
 export interface ResolveResult {
   snapshots: ResolveSnapshot[];
   /** Side that scored, if the ball ended the turn inside a goal mouth. */
   goal: Side | null;
+  /**
+   * Who scored, whenever `goal` is set and a specific pawn could be
+   * identified: the flight's original kicker for a shot/header/cross that
+   * goes straight in, the carrier for a dribbled-in goal, or whoever's
+   * touch produced the roll for a scrappy/deflected one. Null whenever
+   * `goal` is null, OR (rarer) when a goal happened but no specific
+   * touch was on record — e.g. an unopposed kick's landing roll drifting
+   * in with nobody's touch tracked on it. Not attempted at all for
+   * quick-simmed (non-interactive) fixtures — see backend/src/quickSim.ts.
+   */
+  scorer: GoalScorer | null;
   /** Set when the ball left the pitch (any of the three ball-states) and the turn froze for a restart — see boundaryCrossing/classifyDeadBall. */
   deadBall: DeadBallResult | null;
   /**
@@ -1312,7 +1331,11 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           events.push(crossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
           const frozen = current.map((p) => ({ ...p, plannedSteps: [] }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: crossing.side, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+          const kicker = current.find((p) => p.id === flight!.kickerId);
+          const scorer: GoalScorer | null = kicker
+            ? { side: flight!.kickerSide, pawnId: kicker.id, playerId: kicker.player.id, playerName: kicker.player.name }
+            : null;
+          return { snapshots, goal: crossing.side, scorer, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
         }
         // Saved or parried: the flight ends here either way. Capture the
         // flight's direction before nulling it (needed for the parry's
@@ -1349,7 +1372,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         ballPos = boundary.point;
         events.push(deadBallLabel(deadBall));
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-        return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+        return { snapshots, goal: null, scorer: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
       }
 
       const clampedPoint = clampBallToBounds(point);
@@ -1476,7 +1499,15 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           events.push(rollCrossing.side === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
           const frozen = current.map((p) => ({ ...p, plannedSteps: [] }));
           snapshots.push({ pawns: frozen, ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: rollCrossing.side, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+          // Whoever's touch produced this roll gets the goal — a scrappy
+          // deflection is still that player's goal. Genuinely null when the
+          // roll came from an unopposed kick's landing with no touch on
+          // record (see BallRoll.excludeId), not a bug to chase.
+          const toucher = roll!.excludeId ? current.find((p) => p.id === roll!.excludeId) : undefined;
+          const scorer: GoalScorer | null = toucher
+            ? { side: toucher.side, pawnId: toucher.id, playerId: toucher.player.id, playerName: toucher.player.name }
+            : null;
+          return { snapshots, goal: rollCrossing.side, scorer, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
         }
         roll = null;
         if (outcome.result === "caught") {
@@ -1508,7 +1539,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
         ballPos = rollBoundary.point;
         events.push(deadBallLabel(deadBall));
         snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-        return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+        return { snapshots, goal: null, scorer: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
       }
 
       const clampedRollPos = clampBallToBounds(ballPos);
@@ -1558,7 +1589,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
           ballPos = dribbleBoundary.point;
           events.push(deadBallLabel(deadBall));
           snapshots.push({ pawns: current.map((p) => ({ ...p })), ball: { ...ballPos }, ballHeight, events: takeNewEvents() });
-          return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+          return { snapshots, goal: null, scorer: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
         }
 
         // Tackling: a dribbling carrier can be challenged for the ball, not
@@ -1646,7 +1677,7 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
                   ballHeight,
                   events: takeNewEvents(),
                 });
-                return { snapshots, goal: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+                return { snapshots, goal: null, scorer: null, deadBall, tacklesAttempted: [...tacklesAttemptedThisTurn] };
               }
             }
             tackleAttempted.add(challenger.id);
@@ -1709,12 +1740,16 @@ export function resolveTurn(pawns: Pawn[], ball: Ball): ResolveResult {
     if (outcome.result === "goal") {
       events.push(finalGoalSide === "home" ? "GOAL for the home side!" : "GOAL for the away side!");
       if (last) last.events.push(...takeNewEvents());
-      return { snapshots, goal: finalGoalSide, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+      const carrier = current.find((p) => p.id === currentCarrierId);
+      const scorer: GoalScorer | null = carrier
+        ? { side: carrier.side, pawnId: carrier.id, playerId: carrier.player.id, playerName: carrier.player.name }
+        : null;
+      return { snapshots, goal: finalGoalSide, scorer, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
     }
     events.push(`${outcome.gk.player.name} denies it right on the line!`);
     if (last) last.events.push(...takeNewEvents());
-    return { snapshots, goal: null, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+    return { snapshots, goal: null, scorer: null, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
   }
 
-  return { snapshots, goal: null, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
+  return { snapshots, goal: null, scorer: null, deadBall: null, tacklesAttempted: [...tacklesAttemptedThisTurn] };
 }

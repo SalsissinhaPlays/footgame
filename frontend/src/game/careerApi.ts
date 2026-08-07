@@ -1,5 +1,6 @@
 import type { PlayerDTO, TeamDTO } from "./types";
-import type { SaveDTO, LeagueDTO, FixtureDTO, StandingRow, TransferDTO } from "./careerTypes";
+import type { SaveDTO, LeagueDTO, FixtureDTO, StandingRow, TeamTacticsDTO, TopScorerRow, TransferDTO } from "./careerTypes";
+import type { TacticalProfile } from "./tacticalProfile";
 
 // Same relative, same-origin path as api.ts (Vite proxies /api to the
 // backend) — see that file's comment on why this must stay relative rather
@@ -173,16 +174,27 @@ export function fetchFixtures(leagueId: number): Promise<FixtureDTO[]> {
   return fetch(`${API_BASE}/leagues/${leagueId}/fixtures`).then(json<FixtureDTO[]>);
 }
 
-export function recordResult(fixtureId: number, homeScore: number, awayScore: number): Promise<FixtureDTO> {
+/** scorerPlayerIds is one entry per goal (a player id repeated once per goal they scored) — omitted for quick-simmed fixtures, which have no per-goal data. See resolve.ts's GoalScorer/Game.tsx's match.scorers. */
+export function recordResult(
+  fixtureId: number,
+  homeScore: number,
+  awayScore: number,
+  scorerPlayerIds?: number[]
+): Promise<FixtureDTO> {
   return fetch(`${API_BASE}/fixtures/${fixtureId}`, {
     method: "PATCH",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ home_score: homeScore, away_score: awayScore }),
+    body: JSON.stringify({ home_score: homeScore, away_score: awayScore, scorer_player_ids: scorerPlayerIds ?? [] }),
   }).then(json<FixtureDTO>);
 }
 
 export function fetchStandings(leagueId: number): Promise<StandingRow[]> {
   return fetch(`${API_BASE}/leagues/${leagueId}/standings`).then(json<StandingRow[]>);
+}
+
+/** Only ever reflects fixtures the player played interactively — see the backend endpoint's own comment. */
+export function fetchTopScorers(leagueId: number): Promise<TopScorerRow[]> {
+  return fetch(`${API_BASE}/leagues/${leagueId}/top-scorers`).then(json<TopScorerRow[]>);
 }
 
 /** Instantly resolves every still-unplayed fixture in that round via the backend's quick-sim model — see quickSim.ts. */
@@ -197,4 +209,79 @@ export function simulateRound(leagueId: number, round: number): Promise<FixtureD
 /** Only valid once every fixture in the save's current league has a recorded score — creates next season's league + fixtures for the same teams. */
 export function advanceSeason(saveId: number): Promise<LeagueDTO> {
   return fetch(`${API_BASE}/saves/${saveId}/advance-season`, { method: "POST" }).then(json<LeagueDTO>);
+}
+
+// --- Team tactics ---
+// A team with no saved row plays under game/tacticalProfile.ts's own
+// DEFAULT_TACTICAL_PROFILE — the backend mirrors those exact defaults, see
+// its own team_tactics/DEFAULT_TACTICS comments — so fetchTeamTactics
+// always returns a usable TacticalProfile, never a "no tactics yet" state.
+
+export function toTacticalProfile(dto: TeamTacticsDTO): TacticalProfile {
+  return {
+    defensiveLineDepthFrac: dto.defensive_line_depth_frac,
+    pressingTriggerDistanceMult: dto.pressing_trigger_distance_mult,
+    markingCoverageFrac: dto.marking_coverage_frac,
+    attackingCommitmentFrac: dto.attacking_commitment_frac,
+    supportingRunDepthMult: dto.supporting_run_depth_mult,
+    shootingRangeMult: dto.shooting_range_mult,
+    passRiskTolerance: dto.pass_risk_tolerance,
+    crossBias: dto.cross_bias,
+    sprintAggressiveness: dto.sprint_aggressiveness,
+  };
+}
+
+function fromTacticalProfile(profile: TacticalProfile): Omit<TeamTacticsDTO, "team_id"> {
+  return {
+    defensive_line_depth_frac: profile.defensiveLineDepthFrac,
+    pressing_trigger_distance_mult: profile.pressingTriggerDistanceMult,
+    marking_coverage_frac: profile.markingCoverageFrac,
+    attacking_commitment_frac: profile.attackingCommitmentFrac,
+    supporting_run_depth_mult: profile.supportingRunDepthMult,
+    shooting_range_mult: profile.shootingRangeMult,
+    pass_risk_tolerance: profile.passRiskTolerance,
+    cross_bias: profile.crossBias,
+    sprint_aggressiveness: profile.sprintAggressiveness,
+  };
+}
+
+export function fetchTeamTactics(teamId: number): Promise<TeamTacticsDTO> {
+  return fetch(`${API_BASE}/teams/${teamId}/tactics`).then(json<TeamTacticsDTO>);
+}
+
+export function updateTeamTactics(teamId: number, profile: TacticalProfile): Promise<TeamTacticsDTO> {
+  return fetch(`${API_BASE}/teams/${teamId}/tactics`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(fromTacticalProfile(profile)),
+  }).then(json<TeamTacticsDTO>);
+}
+
+// --- Corner-kick presets ---
+// Only ever for a team's OWN attacking corner — see db.ts's
+// team_corner_presets comment for why a defensive setup and free-kicks
+// aren't covered. offsets is in a corner-relative coordinate frame
+// (alongAttack/alongTouch), not raw world x/y — see Game.tsx's
+// cornerPresetOffset/applyCornerPreset for the transform to/from that.
+
+export interface CornerOffset {
+  alongAttack: number;
+  alongTouch: number;
+}
+
+export interface CornerPresetDTO {
+  team_id: number;
+  offsets: CornerOffset[] | null;
+}
+
+export function fetchCornerPreset(teamId: number): Promise<CornerPresetDTO> {
+  return fetch(`${API_BASE}/teams/${teamId}/corner-preset`).then(json<CornerPresetDTO>);
+}
+
+export function saveCornerPreset(teamId: number, offsets: CornerOffset[]): Promise<CornerPresetDTO> {
+  return fetch(`${API_BASE}/teams/${teamId}/corner-preset`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ offsets }),
+  }).then(json<CornerPresetDTO>);
 }

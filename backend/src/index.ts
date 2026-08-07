@@ -512,6 +512,13 @@ app.get("/api/leagues/:id/fixtures", (req, res) => {
   res.json(fixtures);
 });
 
+/**
+ * scorer_player_ids is optional (and only ever sent for a fixture the
+ * player actually played interactively — see Game.tsx's GoalScorer
+ * accumulation and Career.tsx's onCareerMatchEnd) — one entry per goal, a
+ * player id repeated once per goal they scored. Omitted entirely for
+ * quick-simmed fixtures, which only ever produce an aggregate score.
+ */
 app.patch("/api/fixtures/:id", (req, res) => {
   const homeScore = req.body?.home_score;
   const awayScore = req.body?.away_score;
@@ -519,13 +526,34 @@ app.patch("/api/fixtures/:id", (req, res) => {
     res.status(400).json({ error: "home_score and away_score are required" });
     return;
   }
-  const result = db
-    .prepare("UPDATE fixtures SET home_score = ?, away_score = ? WHERE id = ?")
-    .run(homeScore, awayScore, req.params.id);
-  if (result.changes === 0) {
-    res.status(404).json({ error: "fixture not found" });
-    return;
+  const scorerPlayerIds = Array.isArray(req.body?.scorer_player_ids)
+    ? (req.body.scorer_player_ids as unknown[]).filter((id): id is number => typeof id === "number")
+    : [];
+
+  db.exec("BEGIN");
+  let result;
+  try {
+    result = db
+      .prepare("UPDATE fixtures SET home_score = ?, away_score = ? WHERE id = ?")
+      .run(homeScore, awayScore, req.params.id);
+    if (result.changes === 0) {
+      db.exec("ROLLBACK");
+      res.status(404).json({ error: "fixture not found" });
+      return;
+    }
+    // A re-recorded result (rare, but PATCH allows it) shouldn't double up
+    // goal rows — replace this fixture's scorer list outright, same
+    // "regenerating replaces the old list" reasoning generate-fixtures
+    // already uses.
+    db.prepare("DELETE FROM fixture_goals WHERE fixture_id = ?").run(req.params.id);
+    const insertGoal = db.prepare("INSERT INTO fixture_goals (fixture_id, player_id) VALUES (?, ?)");
+    for (const playerId of scorerPlayerIds) insertGoal.run(req.params.id, playerId);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
   }
+
   res.json(db.prepare("SELECT * FROM fixtures WHERE id = ?").get(req.params.id));
 });
 
@@ -737,6 +765,130 @@ app.get("/api/leagues/:id/standings", (req, res) => {
       b.points - a.points || b.goal_difference - a.goal_difference || b.goals_for - a.goals_for || a.team_name.localeCompare(b.team_name)
   );
   res.json(rows);
+});
+
+/**
+ * Only ever reflects fixtures the player actually played interactively —
+ * quick-simmed fixtures (quickSim.ts) never write fixture_goals rows, so a
+ * club's rivals never appear here even though they score plenty of goals
+ * in the standings. That's an accepted gap (see db.ts's fixture_goals
+ * comment), not a bug: there's no per-goal data to attribute for a match
+ * that was never actually simulated tick-by-tick.
+ */
+app.get("/api/leagues/:id/top-scorers", (req, res) => {
+  const league = db.prepare("SELECT id FROM leagues WHERE id = ?").get(req.params.id);
+  if (!league) {
+    res.status(404).json({ error: "league not found" });
+    return;
+  }
+  const rows = db
+    .prepare(
+      `SELECT players.id AS player_id, players.name AS player_name, teams.id AS team_id, teams.name AS team_name, COUNT(*) AS goals
+       FROM fixture_goals
+       JOIN fixtures ON fixtures.id = fixture_goals.fixture_id
+       JOIN players ON players.id = fixture_goals.player_id
+       JOIN teams ON teams.id = players.team_id
+       WHERE fixtures.league_id = ?
+       GROUP BY players.id
+       ORDER BY goals DESC, player_name ASC`
+    )
+    .all(req.params.id);
+  res.json(rows);
+});
+
+// --- Team tactics ---
+// Mirrors frontend/src/game/tacticalProfile.ts's TacticalProfile field-for-
+// field (snake_case here, camelCase there — same hand-kept-in-sync
+// convention as PlayerDTO/TeamDTO). A team with no row just plays under
+// these same defaults — see db.ts's team_tactics comment for why that
+// means zero migration/backfill is needed for already-existing teams.
+
+const TACTIC_FIELDS = [
+  "defensive_line_depth_frac",
+  "pressing_trigger_distance_mult",
+  "marking_coverage_frac",
+  "attacking_commitment_frac",
+  "supporting_run_depth_mult",
+  "shooting_range_mult",
+  "pass_risk_tolerance",
+  "cross_bias",
+  "sprint_aggressiveness",
+] as const;
+
+const DEFAULT_TACTICS: Record<(typeof TACTIC_FIELDS)[number], number> = {
+  defensive_line_depth_frac: 0.4,
+  pressing_trigger_distance_mult: 1.0,
+  marking_coverage_frac: 0.5,
+  attacking_commitment_frac: 0.5,
+  supporting_run_depth_mult: 0.25,
+  shooting_range_mult: 1.0,
+  pass_risk_tolerance: 0.5,
+  cross_bias: 0.4,
+  sprint_aggressiveness: 0.5,
+};
+
+app.get("/api/teams/:id/tactics", (req, res) => {
+  const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
+  if (!team) {
+    res.status(404).json({ error: "team not found" });
+    return;
+  }
+  const row = db.prepare("SELECT * FROM team_tactics WHERE team_id = ?").get(req.params.id) as
+    | Record<string, number>
+    | undefined;
+  res.json({ team_id: Number(req.params.id), ...(row ?? DEFAULT_TACTICS) });
+});
+
+app.put("/api/teams/:id/tactics", (req, res) => {
+  const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
+  if (!team) {
+    res.status(404).json({ error: "team not found" });
+    return;
+  }
+  const values = TACTIC_FIELDS.map((field) => {
+    const v = req.body?.[field];
+    return typeof v === "number" && Number.isFinite(v) ? v : DEFAULT_TACTICS[field];
+  });
+  db.prepare(
+    `INSERT INTO team_tactics (team_id, ${TACTIC_FIELDS.join(", ")})
+     VALUES (?, ${TACTIC_FIELDS.map(() => "?").join(", ")})
+     ON CONFLICT(team_id) DO UPDATE SET ${TACTIC_FIELDS.map((f) => `${f} = excluded.${f}`).join(", ")}`
+  ).run(req.params.id, ...values);
+  res.json(db.prepare("SELECT * FROM team_tactics WHERE team_id = ?").get(req.params.id));
+});
+
+// --- Corner-kick presets ---
+// offsets is stored as an opaque JSON blob — the frontend is the only thing
+// that ever needs to interpret it (see db.ts's team_corner_presets comment
+// for the coordinate frame), so there's no need to model it column-by-column.
+
+app.get("/api/teams/:id/corner-preset", (req, res) => {
+  const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
+  if (!team) {
+    res.status(404).json({ error: "team not found" });
+    return;
+  }
+  const row = db.prepare("SELECT offsets FROM team_corner_presets WHERE team_id = ?").get(req.params.id) as
+    | { offsets: string }
+    | undefined;
+  res.json({ team_id: Number(req.params.id), offsets: row ? JSON.parse(row.offsets) : null });
+});
+
+app.put("/api/teams/:id/corner-preset", (req, res) => {
+  const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
+  if (!team) {
+    res.status(404).json({ error: "team not found" });
+    return;
+  }
+  if (!Array.isArray(req.body?.offsets)) {
+    res.status(400).json({ error: "offsets array is required" });
+    return;
+  }
+  db.prepare(
+    `INSERT INTO team_corner_presets (team_id, offsets) VALUES (?, ?)
+     ON CONFLICT(team_id) DO UPDATE SET offsets = excluded.offsets`
+  ).run(req.params.id, JSON.stringify(req.body.offsets));
+  res.json({ team_id: Number(req.params.id), offsets: req.body.offsets });
 });
 
 const PORT = 3001;

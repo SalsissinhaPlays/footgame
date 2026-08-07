@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
 import { fetchPlayers, fetchTeam, fetchTeams } from "../game/api";
+import { fetchCornerPreset, fetchTeamTactics, saveCornerPreset, toTacticalProfile } from "../game/careerApi";
+import type { CornerOffset } from "../game/careerApi";
+import { DEFAULT_TACTICAL_PROFILE } from "../game/tacticalProfile";
+import type { TacticalProfile } from "../game/tacticalProfile";
 import {
   BALL_START,
   GRID_COLS,
@@ -18,7 +22,7 @@ import { planAiTurn } from "../game/ai";
 import { buildFormation } from "../game/formation";
 import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { chargesFor, resolveTurn } from "../game/resolve";
-import type { DeadBallResult } from "../game/resolve";
+import type { DeadBallResult, GoalScorer } from "../game/resolve";
 import { resolveSetupTurn, SETUP_TURNS_BY_TYPE } from "../game/restartSetup";
 import type { Ball, Pawn, PlannedStep, PlayerDTO, Side, Stance, TeamDTO, Vec2 } from "../game/types";
 import type { MatchCallbacks } from "../phaser/MatchScene";
@@ -141,6 +145,36 @@ function kickoffFormation(pawns: Pawn[]): Pawn[] {
 }
 
 /**
+ * Converts a world position into a corner-relative offset: `alongAttack` is
+ * distance out from the goal line into the pitch (always positive for a
+ * pawn actually on the pitch), `alongTouch` is distance toward the pitch's
+ * CENTER from the corner's own near touchline (also always positive for a
+ * sane setup position). Both signs are derived from which side is taking
+ * the corner and which of the two same-end corners `spot` is at, which is
+ * what lets one saved preset correctly re-apply at either corner of a
+ * team's attacking end, and in either home/away orientation — see
+ * db.ts's team_corner_presets comment for why this frame, not raw x/y.
+ */
+function cornerPresetOffset(pos: Vec2, deadBall: DeadBallResult): CornerOffset {
+  const attackSign = deadBall.side === "home" ? 1 : -1;
+  const centerSign = deadBall.spot.y < GRID_ROWS / 2 ? 1 : -1;
+  return {
+    alongAttack: attackSign * (deadBall.spot.x - pos.x),
+    alongTouch: centerSign * (pos.y - deadBall.spot.y),
+  };
+}
+
+/** The inverse of cornerPresetOffset — turns a saved offset back into a world position for THIS specific corner. */
+function applyCornerOffset(offset: CornerOffset, deadBall: DeadBallResult): Vec2 {
+  const attackSign = deadBall.side === "home" ? 1 : -1;
+  const centerSign = deadBall.spot.y < GRID_ROWS / 2 ? 1 : -1;
+  return {
+    x: deadBall.spot.x - attackSign * offset.alongAttack,
+    y: deadBall.spot.y + centerSign * offset.alongTouch,
+  };
+}
+
+/**
  * Everything that constitutes "the match" as a single serializable object —
  * what a save/load or a future network sync would need to reconstruct play
  * exactly where it stood. Deliberately does NOT include per-viewer UI/input
@@ -162,6 +196,8 @@ interface MatchState {
   restartSetup: { deadBall: DeadBallResult; turnsRemaining: number } | null;
   events: string[];
   resolving: boolean;
+  /** Every identified goal this match, in order — accumulated across the whole match the same way `events` already is, not reset per turn. Reported to onCareerMatchEnd for top-scorer tracking (see careerApi.ts's recordResult). */
+  scorers: GoalScorer[];
 }
 
 function initialMatchState(): MatchState {
@@ -178,6 +214,7 @@ function initialMatchState(): MatchState {
     restartSetup: null,
     events: [],
     resolving: false,
+    scorers: [],
   };
 }
 
@@ -192,13 +229,21 @@ interface Props {
   homeTeamId?: number;
   awayTeamId?: number;
   /**
+   * Career mode only: exactly which of the home roster's players actually
+   * take the pitch — see Career.tsx's LineupSelect screen. When omitted,
+   * buildFormation's own fallback applies (the roster's first players in
+   * jersey_number order, per position). Only ever meaningful for the human
+   * side — the AI opponent doesn't get a lineup choice.
+   */
+  homeStartingPlayerIds?: number[];
+  /**
    * Career mode only: renders an "End Match & Record Result" button that
    * calls this with the current score instead of just exiting. Matches here
    * have no built-in end condition (see resolve.ts's removed TOTAL_TURNS) —
    * this is what lets the player decide "this fixture is done" and hand the
    * result back to the league it came from.
    */
-  onCareerMatchEnd?: (homeScore: number, awayScore: number) => void;
+  onCareerMatchEnd?: (homeScore: number, awayScore: number, scorers: GoalScorer[]) => void;
   /**
    * Fullscreen is owned by App.tsx now (targets document.documentElement,
    * not any one screen's wrapper div) so it survives navigating between
@@ -226,7 +271,16 @@ const PAN_SPEED = 2600;
 // middle/side-mouse-button drag, since not every mouse has those buttons.
 const ROTATE_KEY_SPEED = 90;
 
-export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatchEnd, isFullscreen, onToggleFullscreen }: Props) {
+export function Game({
+  mode,
+  onExitToMenu,
+  homeTeamId,
+  awayTeamId,
+  homeStartingPlayerIds,
+  onCareerMatchEnd,
+  isFullscreen,
+  onToggleFullscreen,
+}: Props) {
   const sceneRef = useRef<MatchScene | null>(null);
   const handlersRef = useRef<MatchCallbacks>({
     onPawnClick: () => {},
@@ -318,6 +372,7 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
   // nothing here is persisted to the backend.
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
   const [awayAiEnabled, setAwayAiEnabled] = useState(false);
+  const [benchOpen, setBenchOpen] = useState(false);
   // Set by "+ Add Player"; consumed by the next field click, which places
   // the new pawn there instead of doing anything else (see handleFieldClick).
   const [placingPawnSide, setPlacingPawnSide] = useState<Side | null>(null);
@@ -330,6 +385,21 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
   const [pickingMarkTarget, setPickingMarkTarget] = useState(false);
   const [handoff, setHandoff] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Career mode only: whoever LineupSelect left out of the starting 6 —
+  // populated once in the load effect below, then only ever moves between
+  // this list and match.pawns via handleSubstitute. Empty (and the whole
+  // Bench UI hidden) for every other mode, since only a career match with
+  // an explicit lineup choice has a real bench to draw from.
+  const [benchedPlayers, setBenchedPlayers] = useState<PlayerDTO[]>([]);
+  // The benched player about to come on, once the player clicks their name
+  // in the Bench panel — the next home-side pawn clicked is who they
+  // replace. Mirrors pickingMarkTarget's own "arm a mode, then click the
+  // target on the pitch" shape.
+  const [subReplacement, setSubReplacement] = useState<PlayerDTO | null>(null);
+  // The away team's saved tactical identity (see TeamTactics.tsx) — a team
+  // with no saved row just plays under this same default, so this state
+  // never needs a "not loaded yet" distinction from "genuinely default."
+  const [awayTacticalProfile, setAwayTacticalProfile] = useState<TacticalProfile>(DEFAULT_TACTICAL_PROFILE);
 
   useEffect(() => {
     async function load() {
@@ -343,20 +413,58 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
       const homePlayers = await fetchPlayers(home.id);
       const awayPlayers = await fetchPlayers(away.id);
       setTeams([home, away]);
+      fetchTeamTactics(away.id)
+        .then((dto) => setAwayTacticalProfile(toTacticalProfile(dto)))
+        .catch(() => setAwayTacticalProfile(DEFAULT_TACTICAL_PROFILE));
+      // A career lineup choice (LineupSelect) filters the roster down to
+      // exactly the chosen starters before it ever reaches buildFormation —
+      // whoever isn't in this list simply never becomes a pawn, same as any
+      // other roster surplus (see formation.ts's assignSlots). Falls back to
+      // the full roster (buildFormation's own default ordering) whenever no
+      // lineup was chosen, e.g. hotseat/AI/solo modes that never pass this.
+      const startingHomePlayers =
+        homeStartingPlayerIds && homeStartingPlayerIds.length > 0
+          ? homePlayers.filter((p) => homeStartingPlayerIds.includes(p.id))
+          : homePlayers;
+      const homeFormation = buildFormation(startingHomePlayers, "home");
+      const awayFormation = buildFormation(awayPlayers, "away");
+      setBenchedPlayers(
+        homeStartingPlayerIds && homeStartingPlayerIds.length > 0
+          ? homePlayers.filter((p) => !homeStartingPlayerIds.includes(p.id))
+          : []
+      );
+      // Coin toss for the match's TRUE opening kickoff only — resolve.ts's
+      // carrier is whoever starts within CAPTURE_RADIUS of the ball, and
+      // both sides' formation forwards sit well outside that radius (a
+      // symmetric, neutral kickoff), so without this every opening kickoff
+      // would just be an unclaimed scramble every pawn is equally far from.
+      // The coin-toss winner's central forward (the formation's last slot —
+      // FWD in FORMATION_6V6_DEFAULT) is teleported exactly onto the ball,
+      // matching how a real kickoff always starts in someone's possession.
+      // Deliberately scoped to this one initial load only — post-goal
+      // restarts (kickoffFormation, below) are untouched and stay a neutral
+      // scramble; a coin toss is a pre-match ritual, not a per-goal one.
+      const kickoffSide: Side = Math.random() < 0.5 ? "home" : "away";
+      const placeOnBall = (formation: Pawn[]): Pawn[] =>
+        formation.map((p, i) => (i === formation.length - 1 ? { ...p, pos: { ...BALL_START } } : p));
       setMatch((prev) => ({
         ...prev,
-        pawns: [...buildFormation(homePlayers, "home"), ...buildFormation(awayPlayers, "away")],
+        pawns: [
+          ...(kickoffSide === "home" ? placeOnBall(homeFormation) : homeFormation),
+          ...(kickoffSide === "away" ? placeOnBall(awayFormation) : awayFormation),
+        ],
       }));
       setLoading(false);
     }
     load();
-    // homeTeamId/awayTeamId only ever change across a full unmount/remount
-    // (Career.tsx's screen switch always passes through a non-"match"
-    // screen in between two different fixtures — see Career.tsx), never as
-    // a live prop update on an already-mounted Game, so including them here
-    // doesn't introduce a real re-fetch risk mid-match; it's just what
-    // satisfies exhaustive-deps honestly instead of suppressing it.
-  }, [homeTeamId, awayTeamId]);
+    // homeTeamId/awayTeamId/homeStartingPlayerIds only ever change across a
+    // full unmount/remount (Career.tsx's screen switch always passes
+    // through a non-"match" screen in between two different fixtures — see
+    // Career.tsx), never as a live prop update on an already-mounted Game,
+    // so including them here doesn't introduce a real re-fetch risk
+    // mid-match; it's just what satisfies exhaustive-deps honestly instead
+    // of suppressing it.
+  }, [homeTeamId, awayTeamId, homeStartingPlayerIds]);
 
   // WASD pans the camera (screen-relative: W/S move the view up/down, A/D
   // left/right). The delta itself is still applied in view-space, same as
@@ -556,6 +664,35 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
   // projection.
   const CANCEL_CLICK_EPS = 1.2;
 
+  // Swaps a benched player onto the pitch in place of an on-pitch pawn —
+  // immediate, not a planned/queued action, since a substitution happens
+  // at a stoppage in real football, not something resolved tick-by-tick.
+  // Constructs the incoming Pawn the same way buildFormation does (fresh
+  // planning/stance/cooldown state, id = `${side}-${player.id}`) at the
+  // OUTGOING pawn's current position — a sub takes over exactly where they
+  // stood, not a formation slot, since the match may be well underway.
+  function performSubstitution(outgoing: Pawn, incoming: PlayerDTO) {
+    const newPawn: Pawn = {
+      id: `${outgoing.side}-${incoming.id}`,
+      player: incoming,
+      side: outgoing.side,
+      pos: outgoing.pos,
+      plannedSteps: [],
+      stance: null,
+      plannedSprint: false,
+      sprintCooldown: 0,
+      plannedTackle: null,
+      tackleCooldown: 0,
+    };
+    setMatch((prev) => ({
+      ...prev,
+      pawns: prev.pawns.map((p) => (p.id === outgoing.id ? newPawn : p)),
+    }));
+    setBenchedPlayers((prev) => [...prev.filter((p) => p.id !== incoming.id), outgoing.player]);
+    setSubReplacement(null);
+    if (selectedId === outgoing.id) setSelectedId(null);
+  }
+
   function handlePawnClick(pawn: Pawn) {
     if (match.resolving) return;
     // Placing a new pawn exactly where an existing one stands is legitimate
@@ -564,6 +701,14 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
     // would just select/deselect it instead of placing the new one there.
     if (placingPawnSide) {
       handleFieldClick(pawn.pos);
+      return;
+    }
+    // Substitution target: the next home-side pawn clicked is who the
+    // armed bench player replaces. Gated on "home" specifically, not
+    // match.controllingSide — a bench only ever exists for the human's own
+    // career-mode team (see benchedPlayers above), regardless of mode.
+    if (subReplacement && pawn.side === "home") {
+      performSubstitution(pawn, subReplacement);
       return;
     }
     if (pickingMarkTarget && selectedPawn && pawn.side !== match.controllingSide) {
@@ -755,6 +900,7 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
    */
   function deselectPawn() {
     setPlacingPawnSide(null);
+    setSubReplacement(null);
     if (match.resolving || !selectedPawn) return;
     setSelectedId(null);
     setKickMode(false);
@@ -1010,7 +1156,7 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
       return;
     }
 
-    const { snapshots, goal, deadBall, tacklesAttempted } = resolveTurn(inputPawns, match.ball);
+    const { snapshots, goal, scorer, deadBall, tacklesAttempted } = resolveTurn(inputPawns, match.ball);
     let prevPawns = inputPawns;
     let prevBallPos = match.ball.pos;
     // Revealed tick-by-tick in step with the animation, rather than dumped
@@ -1065,6 +1211,7 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
         ...prev,
         homeScore: goal === "home" ? prev.homeScore + 1 : prev.homeScore,
         awayScore: goal === "away" ? prev.awayScore + 1 : prev.awayScore,
+        scorers: scorer ? [...prev.scorers, scorer] : prev.scorers,
       }));
       await sleep(600);
       setMatch((prev) => ({
@@ -1131,6 +1278,53 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
     }));
   }
 
+  // Both only ever act on the CURRENT corner's setup (match.restartSetup),
+  // and only ever for "home" — see the Tactics/corner-preset buttons' own
+  // gating below for why (a saved preset only makes sense for a team's own
+  // attacking corner, never a defensive setup).
+  async function handleSaveCornerPreset() {
+    const restartSetup = match.restartSetup;
+    const homeTeamId = teams[0]?.id;
+    if (!restartSetup || !homeTeamId) return;
+    const offsets = match.pawns
+      .filter((p) => p.side === "home")
+      .map((p) => cornerPresetOffset(p.pos, restartSetup.deadBall));
+    try {
+      await saveCornerPreset(homeTeamId, offsets);
+    } catch {
+      // Best-effort — no dedicated error UI for this yet, matching the
+      // low-stakes nature of a convenience preset (worst case, the player
+      // just repositions manually like before this existed).
+    }
+  }
+
+  async function handleApplyCornerPreset() {
+    const restartSetup = match.restartSetup;
+    const homeTeamId = teams[0]?.id;
+    if (!restartSetup || !homeTeamId) return;
+    try {
+      const { offsets } = await fetchCornerPreset(homeTeamId);
+      if (!offsets || offsets.length === 0) return;
+      const deadBall = restartSetup.deadBall;
+      setMatch((prev) => {
+        const homePawns = prev.pawns.filter((p) => p.side === "home");
+        const offsetById = new Map(
+          homePawns.map((p, i) => [p.id, offsets[i]] as const).filter((entry): entry is [string, CornerOffset] => entry[1] !== undefined)
+        );
+        return {
+          ...prev,
+          pawns: prev.pawns.map((p) => {
+            const offset = offsetById.get(p.id);
+            if (!offset) return p;
+            return { ...p, plannedSteps: [{ pos: applyCornerOffset(offset, deadBall) }] };
+          }),
+        };
+      });
+    } catch {
+      // Best-effort, same reasoning as handleSaveCornerPreset above.
+    }
+  }
+
   async function handleReady() {
     if (match.resolving) return;
     setSelectedId(null);
@@ -1142,7 +1336,7 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
     setPlacingPawnSide(null);
 
     if (mode === "ai") {
-      const withAiMoves = planAiTurn(match.pawns, match.ball, "away");
+      const withAiMoves = planAiTurn(match.pawns, match.ball, "away", awayTacticalProfile);
       await resolveWithPawns(withAiMoves);
       return;
     }
@@ -1152,7 +1346,7 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
       // solo's original "away never gets a plan" meaning), on demand when
       // the player wants to see how their custom roster actually plays
       // against the AI instead of just standing still.
-      const pawnsForTurn = awayAiEnabled ? planAiTurn(match.pawns, match.ball, "away") : match.pawns;
+      const pawnsForTurn = awayAiEnabled ? planAiTurn(match.pawns, match.ball, "away", awayTacticalProfile) : match.pawns;
       await resolveWithPawns(pawnsForTurn);
       return;
     }
@@ -1277,10 +1471,21 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
               )}
             </div>
             {pickingMarkTarget && <div className="hud-banner">Click an opponent pawn to mark.</div>}
+            {subReplacement && <div className="hud-banner">Click a pawn to bring on {subReplacement.name}.</div>}
             {match.restartSetup && (
               <div className="hud-banner">
                 Setting up for a {RESTART_TYPE_LABEL[match.restartSetup.deadBall.type].toLowerCase()} —{" "}
                 {match.restartSetup.turnsRemaining} turn{match.restartSetup.turnsRemaining > 1 ? "s" : ""} left
+                {match.restartSetup.deadBall.type === "corner" && match.restartSetup.deadBall.side === "home" && (
+                  <span className="corner-preset-actions">
+                    <button type="button" className="corner-preset-btn" onClick={handleApplyCornerPreset}>
+                      Apply my preset
+                    </button>
+                    <button type="button" className="corner-preset-btn" onClick={handleSaveCornerPreset}>
+                      Save as my preset
+                    </button>
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -1301,11 +1506,20 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
                 Team Management
               </button>
             )}
+            {benchedPlayers.length > 0 && (
+              <button
+                type="button"
+                className={`exit-button ${benchOpen ? "active" : ""}`}
+                onClick={() => setBenchOpen((o) => !o)}
+              >
+                Bench ({benchedPlayers.length})
+              </button>
+            )}
             {onCareerMatchEnd && (
               <button
                 type="button"
                 className="exit-button"
-                onClick={() => onCareerMatchEnd(match.homeScore, match.awayScore)}
+                onClick={() => onCareerMatchEnd(match.homeScore, match.awayScore, match.scorers)}
               >
                 End Match & Record Result
               </button>
@@ -1315,6 +1529,34 @@ export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatch
             </button>
           </div>
         </div>
+
+        {benchOpen && benchedPlayers.length > 0 && (
+          <div className="hud-middle-row">
+            <div className="hud-panel bench-panel">
+              <div className="team-management-header">Bench</div>
+              <ul className="bench-list">
+                {benchedPlayers.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      className="bench-list-item"
+                      onClick={() => {
+                        setSubReplacement(p);
+                        setBenchOpen(false);
+                      }}
+                    >
+                      <span className="bench-list-pos">{p.position}</span>
+                      <span className="bench-list-name">
+                        #{p.jersey_number} {p.name}
+                      </span>
+                      <span className="bench-list-action">Bring on</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
 
         {mode === "solo" && teamManagementOpen && (
           <div className="hud-middle-row">

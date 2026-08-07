@@ -44,6 +44,28 @@ export interface StandingRow {
   points: number;
 }
 
+/** Snake_case, matching the backend's team_tactics table — see careerApi.ts's toTacticalProfile/fromTacticalProfile for the mapping to/from game/tacticalProfile.ts's camelCase TacticalProfile. */
+export interface TeamTacticsDTO {
+  team_id: number;
+  defensive_line_depth_frac: number;
+  pressing_trigger_distance_mult: number;
+  marking_coverage_frac: number;
+  attacking_commitment_frac: number;
+  supporting_run_depth_mult: number;
+  shooting_range_mult: number;
+  pass_risk_tolerance: number;
+  cross_bias: number;
+  sprint_aggressiveness: number;
+}
+
+export interface TopScorerRow {
+  player_id: number;
+  player_name: string;
+  team_id: number;
+  team_name: string;
+  goals: number;
+}
+
 export interface TransferDTO {
   id: number;
   player_id: number;
