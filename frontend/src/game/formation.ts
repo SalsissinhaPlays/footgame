@@ -8,21 +8,29 @@ function mirrorX(x: number): number {
 }
 
 /**
- * Assigns each player to the formation slot matching their PlayerDTO.position,
- * falling back to whatever slot is left over for anyone whose position has no
- * (or no more) matching slot — e.g. an extra MID beyond the formation's own
- * MID count still gets placed somewhere sensible rather than dropped. Slot
- * order/count is entirely data-driven (see formations.ts) — this algorithm
- * has no knowledge of squad size or shape.
+ * Assigns each formation SLOT the first remaining player matching its
+ * position, falling back to whichever player is left if none match (e.g. a
+ * roster missing a GK entirely still fields someone in goal rather than
+ * leaving the slot empty). Iterating over slots rather than players is
+ * what correctly benches a roster's surplus beyond the formation's own
+ * size — a 12-player squad (starterLeague.ts deliberately carries a backup
+ * GK plus real squad depth) only ever puts formation.slots.length players
+ * on the pitch; the other half of the roster is simply never assigned a
+ * position and never becomes a pawn. Slot order/count is entirely
+ * data-driven (see formations.ts) — this algorithm has no knowledge of
+ * squad size or shape.
  */
 function assignSlots(players: PlayerDTO[], formation: Formation): { player: PlayerDTO; pos: Vec2 }[] {
-  const remaining = [...formation.slots];
-  return players.map((player) => {
-    const matchIndex = remaining.findIndex((s) => s.position === player.position);
+  const remaining = [...players];
+  const result: { player: PlayerDTO; pos: Vec2 }[] = [];
+  for (const slot of formation.slots) {
+    if (remaining.length === 0) break; // fewer players than the formation has slots
+    const matchIndex = remaining.findIndex((p) => p.position === slot.position);
     const index = matchIndex !== -1 ? matchIndex : 0;
-    const [slot] = remaining.splice(index, 1);
-    return { player, pos: slot?.pos ?? { x: GRID_COLS / 2, y: 20 } };
-  });
+    const [player] = remaining.splice(index, 1);
+    result.push({ player, pos: slot.pos });
+  }
+  return result;
 }
 
 export function buildFormation(players: PlayerDTO[], side: Side, formation: Formation = FORMATION_6V6_DEFAULT): Pawn[] {

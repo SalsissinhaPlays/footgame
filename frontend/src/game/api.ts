@@ -12,6 +12,12 @@ export async function fetchTeams(): Promise<TeamDTO[]> {
   return res.json();
 }
 
+/** Single-team lookup — used by Game.tsx's career-match path to load a specific team's info by id, rather than always taking the first two rows off fetchTeams(). */
+export async function fetchTeam(teamId: number): Promise<TeamDTO> {
+  const res = await fetch(`${API_BASE}/teams/${teamId}`);
+  return res.json();
+}
+
 export async function fetchPlayers(teamId: number): Promise<PlayerDTO[]> {
   const res = await fetch(`${API_BASE}/teams/${teamId}/players`);
   return res.json();

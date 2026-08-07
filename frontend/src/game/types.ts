@@ -17,6 +17,9 @@ export interface PlayerDTO {
 export interface TeamDTO {
   id: number;
   name: string;
+  /** null for teams created before saves existed (today's demo teams) or otherwise outside any save. */
+  save_id: number | null;
+  created_at: string;
 }
 
 export interface Vec2 {

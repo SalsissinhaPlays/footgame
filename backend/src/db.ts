@@ -10,6 +10,12 @@ db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS saves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS teams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -31,6 +37,57 @@ db.exec(`
     heading INTEGER NOT NULL DEFAULT 50,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- A transfer is always team-to-team (sign a player away from their
+  -- current team) — free agents / an unsigned player pool are a separate,
+  -- not-yet-built concept (they'd belong with newgens/player generation,
+  -- not here) and deliberately out of scope for this table.
+  CREATE TABLE IF NOT EXISTS transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    from_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    to_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    fee INTEGER NOT NULL DEFAULT 0,
+    -- Nullable: a transfer between teams that aren't part of any save (e.g.
+    -- today's unscoped demo teams) has no season to record it against.
+    season INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Unlike a transfer, a league only makes sense within a save's world, so
+  -- save_id is NOT NULL here. Each row is one competition for one season —
+  -- "the same league" continuing next season with different membership is
+  -- just a new row, not a mutation of this one. That sidesteps
+  -- promotion/relegation entirely, which isn't a requirement yet.
+  CREATE TABLE IF NOT EXISTS leagues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    save_id INTEGER NOT NULL REFERENCES saves(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    season INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS league_teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id INTEGER NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    UNIQUE(league_id, team_id)
+  );
+
+  -- home_score/away_score are NULL until the fixture is played — standings
+  -- are computed live from these (see computeStandings in index.ts) rather
+  -- than stored as a separately-maintained table, so there's no way for a
+  -- standings row to drift out of sync with the actual results.
+  CREATE TABLE IF NOT EXISTS fixtures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id INTEGER NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+    round INTEGER NOT NULL,
+    home_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    away_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    home_score INTEGER,
+    away_score INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // CREATE TABLE IF NOT EXISTS is a no-op against a DB that already exists on
@@ -48,6 +105,27 @@ ensureColumn("players", "jumping", "jumping INTEGER NOT NULL DEFAULT 50");
 ensureColumn("players", "shot_stopping", "shot_stopping INTEGER NOT NULL DEFAULT 50");
 ensureColumn("players", "reflexes", "reflexes INTEGER NOT NULL DEFAULT 50");
 ensureColumn("players", "heading", "heading INTEGER NOT NULL DEFAULT 50");
+// Nullable, no default: existing teams (today's seeded demo data, and any
+// team created before saves existed) get save_id = NULL, meaning "not part
+// of any save" — that's what keeps the existing unscoped GET /api/teams
+// path (used by the live match/hotseat/AI/sandbox flows) behaving exactly
+// as it does today. save_id only matters to the new, separate
+// /api/saves/... routes. players don't get their own save_id — they
+// inherit their save through team_id, same as they already inherit
+// everything else about their team.
+ensureColumn("teams", "save_id", "save_id INTEGER REFERENCES saves(id) ON DELETE CASCADE");
+// The minimal "time is passing" primitive a save needs — deliberately just
+// a season counter, not a full calendar/date system, since nothing
+// (Transfers, and later Leagues/Progression) needs day-level granularity
+// yet. Starts at 1; nothing currently advances it — that action belongs
+// with whichever system first needs to trigger "a season ended" (Leagues'
+// fixture list finishing, most likely), not built speculatively here.
+ensureColumn("saves", "season", "season INTEGER NOT NULL DEFAULT 1");
+// Nullable: a save's user-chosen team, set via PATCH /api/saves/:id once
+// the player picks one from the auto-generated starter league (see
+// starterLeague.ts and POST /api/saves) — null only briefly between a save
+// being created and the choice actually being made.
+ensureColumn("saves", "user_team_id", "user_team_id INTEGER REFERENCES teams(id)");
 
 function seedIfEmpty() {
   const teamCount = db.prepare("SELECT COUNT(*) AS n FROM teams").get() as { n: number };

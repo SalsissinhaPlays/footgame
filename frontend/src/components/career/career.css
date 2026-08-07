@@ -1,0 +1,587 @@
+.career-page {
+  max-width: 720px;
+  margin: 40px auto;
+  padding: 24px;
+  font-family: system-ui, sans-serif;
+  /*
+   * Pinned to a light theme regardless of the OS/browser's prefers-color-scheme.
+   * Every rule below (borders, muted grays, button fills) was authored assuming
+   * a white background; index.css's --bg/--text vars flip to dark-mode values
+   * that this subtree never picks up, which used to leave hardcoded dark text
+   * (e.g. .career-list-open) nearly invisible against an inherited dark page
+   * background. Pinning here keeps the whole career UI internally consistent
+   * instead of chasing every hardcoded color individually.
+   *
+   * color: #1a1a1a only fixes elements that INHERIT text color. Two other
+   * things don't inherit it and need their own fix: (1) native form
+   * controls (input/select/button) — color-scheme: light dark in index.css
+   * lets the browser render their background/text using OS dark-mode
+   * widget defaults for any property the author didn't set explicitly,
+   * which is why unstyled inputs/selects here were rendering as solid
+   * black boxes; color-scheme: light below pins every native control in
+   * this subtree to light-mode rendering. (2) h1/h2 — index.css gives them
+   * their own `color: var(--text-h)` rule, which as a direct rule on the
+   * element wins over inheriting this container's color; overridden below.
+   */
+  background: #fff;
+  color: #1a1a1a;
+  color-scheme: light;
+}
+
+.career-page h1,
+.career-page h2 {
+  color: #1a1a1a;
+}
+
+/*
+ * :where() keeps this at effectively zero specificity, so it only fills in
+ * a default for buttons that don't already set their own color (.career-back,
+ * .career-btn-small) — it can never fight .career-btn-primary/.career-home-button/etc,
+ * which set an explicit color and must keep winning the cascade normally.
+ */
+:where(.career-page) button {
+  color: #1a1a1a;
+}
+
+.career-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.career-header h1 {
+  font-size: 24px;
+  margin: 0;
+}
+
+.career-header .career-muted {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.career-back {
+  background: none;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.career-back:hover {
+  background: #f0f0f0;
+}
+
+.career-error {
+  background: #fdecea;
+  color: #b3261e;
+  border: 1px solid #f5c6c3;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.career-section {
+  margin-bottom: 32px;
+}
+
+.career-section h2 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+
+.career-create-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.career-create-row input,
+.career-create-row select {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.career-create-row button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #2e7d32;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.career-create-row button:hover {
+  background: #266529;
+}
+
+.career-empty {
+  color: #888;
+  font-size: 14px;
+  font-style: italic;
+}
+
+.career-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.career-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid #eee;
+  gap: 10px;
+}
+
+.career-list-row:last-child {
+  border-bottom: none;
+}
+
+.career-list-open {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0;
+  color: #1a1a1a;
+}
+
+.career-list-open:hover {
+  color: #2e7d32;
+}
+
+.career-delete,
+.career-remove {
+  background: none;
+  border: 1px solid #d9534f;
+  color: #d9534f;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.career-delete:hover,
+.career-remove:hover {
+  background: #fdecea;
+}
+
+/* --- Player rows (TeamDetail) --- */
+
+.career-player-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #eee;
+}
+
+.career-player-row:last-child {
+  border-bottom: none;
+}
+
+.career-player-row input[type="text"] {
+  width: 130px;
+}
+
+.career-player-row input[type="number"] {
+  width: 52px;
+}
+
+.career-player-row input,
+.career-player-row select {
+  padding: 5px 6px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  font-size: 13px;
+}
+
+.career-attr-label {
+  font-size: 11px;
+  color: #888;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.career-player-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.career-btn-small {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: white;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.career-btn-small:hover {
+  background: #f0f0f0;
+}
+
+.career-btn-primary {
+  border-color: #2e7d32;
+  background: #2e7d32;
+  color: white;
+}
+
+.career-btn-primary:hover {
+  background: #266529;
+}
+
+.career-transfer-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #ddd;
+  width: 100%;
+}
+
+/* --- League detail: fixtures + standings --- */
+
+.career-round {
+  margin-bottom: 14px;
+}
+
+.career-round h3 {
+  font-size: 13px;
+  color: #888;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.career-fixture-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.career-fixture-team {
+  flex: 1;
+  text-align: right;
+}
+
+.career-fixture-team.away {
+  text-align: left;
+}
+
+.career-fixture-score {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.career-fixture-score input {
+  width: 40px;
+  text-align: center;
+  padding: 4px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.career-standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.career-standings-table th,
+.career-standings-table td {
+  padding: 6px 8px;
+  text-align: center;
+  border-bottom: 1px solid #eee;
+}
+
+.career-standings-table th:first-child,
+.career-standings-table td:first-child {
+  text-align: left;
+}
+
+.career-standings-table th {
+  color: #888;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+/* --- Career home (Continue / Load Game / New Game / Return) --- */
+
+.career-home-options {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.career-home-button {
+  padding: 16px;
+  font-size: 17px;
+  font-weight: 700;
+  border-radius: 8px;
+  border: 2px solid #2e7d32;
+  background: #2e7d32;
+  color: white;
+  cursor: pointer;
+  text-align: center;
+}
+
+.career-home-button:hover:not(:disabled) {
+  background: #266529;
+}
+
+.career-home-button:disabled {
+  background: #eee;
+  border-color: #ccc;
+  color: #999;
+  cursor: default;
+}
+
+.career-home-button-secondary {
+  background: white;
+  color: #2e7d32;
+}
+
+.career-home-button-secondary:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+
+/* --- New game: manager name entry --- */
+
+.career-name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 320px;
+}
+
+.career-name-form input {
+  padding: 10px 12px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 16px;
+}
+
+/* --- Choose team: whole row is clickable, not just a "Choose" button --- */
+
+.career-list-row-clickable {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  padding: 10px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.career-list-row-clickable:hover {
+  background: #f6f6f6;
+}
+
+/* --- Team preview (roster shown before confirming a pick) --- */
+
+.career-preview-player-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+}
+
+.career-preview-player-row:last-child {
+  border-bottom: none;
+}
+
+.career-preview-player-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.career-preview-player-pos {
+  color: #888;
+  font-size: 12px;
+  width: 32px;
+}
+
+.career-preview-actions {
+  margin-top: 20px;
+}
+
+/* --- Team Management: two-pane (player list left, detail right) --- */
+
+.career-page-wide {
+  max-width: 960px;
+}
+
+.career-team-mgmt {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.career-team-mgmt-list {
+  width: 240px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.career-team-mgmt-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #eee;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.career-team-mgmt-list-item:hover {
+  background: #f6f6f6;
+}
+
+.career-team-mgmt-list-item.selected {
+  background: #e8f5e9;
+  border-left: 3px solid #2e7d32;
+  padding-left: 9px;
+}
+
+.career-team-mgmt-list-pos {
+  font-size: 11px;
+  font-weight: 700;
+  color: #888;
+  width: 28px;
+  flex: 0 0 auto;
+}
+
+.career-team-mgmt-list-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.career-team-mgmt-list-add {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: #f0f0f0;
+  color: #2e7d32;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+
+.career-team-mgmt-list-add:hover {
+  background: #e6e6e6;
+}
+
+.career-team-mgmt-detail {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.career-player-detail-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.career-player-detail-header input[type="text"] {
+  flex: 1;
+  font-size: 18px;
+  font-weight: 700;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+.career-player-detail-header select {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+.career-player-detail-attrs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 24px;
+  margin-bottom: 20px;
+}
+
+.career-attr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  gap: 10px;
+}
+
+.career-attr-row input {
+  width: 60px;
+  padding: 5px 6px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  text-align: center;
+}
+
+.career-new-player-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.career-new-player-form input,
+.career-new-player-form select {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  font-size: 13px;
+}

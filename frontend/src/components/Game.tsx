@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
-import { fetchPlayers, fetchTeams } from "../game/api";
+import { fetchPlayers, fetchTeam, fetchTeams } from "../game/api";
 import {
   BALL_START,
   GRID_COLS,
@@ -184,6 +184,31 @@ function initialMatchState(): MatchState {
 interface Props {
   mode: "hotseat" | "ai" | "solo";
   onExitToMenu: () => void;
+  /**
+   * Career mode only: load these specific teams' real rosters instead of
+   * the default demo teams fetchTeams() always returns. Both or neither —
+   * there's no meaningful "one real team, one demo team" case.
+   */
+  homeTeamId?: number;
+  awayTeamId?: number;
+  /**
+   * Career mode only: renders an "End Match & Record Result" button that
+   * calls this with the current score instead of just exiting. Matches here
+   * have no built-in end condition (see resolve.ts's removed TOTAL_TURNS) —
+   * this is what lets the player decide "this fixture is done" and hand the
+   * result back to the league it came from.
+   */
+  onCareerMatchEnd?: (homeScore: number, awayScore: number) => void;
+  /**
+   * Fullscreen is owned by App.tsx now (targets document.documentElement,
+   * not any one screen's wrapper div) so it survives navigating between
+   * menu/career/match — the browser auto-exits fullscreen the instant its
+   * target element unmounts, which used to happen here every time this
+   * component's own wrapper (fullscreen's old target) got swapped out for a
+   * different screen.
+   */
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }
 
 // Scaled up along with the field-expansion pitch rescale — these were tuned
@@ -201,8 +226,7 @@ const PAN_SPEED = 2600;
 // middle/side-mouse-button drag, since not every mouse has those buttons.
 const ROTATE_KEY_SPEED = 90;
 
-export function Game({ mode, onExitToMenu }: Props) {
-  const wrapperRef = useRef<HTMLDivElement>(null);
+export function Game({ mode, onExitToMenu, homeTeamId, awayTeamId, onCareerMatchEnd, isFullscreen, onToggleFullscreen }: Props) {
   const sceneRef = useRef<MatchScene | null>(null);
   const handlersRef = useRef<MatchCallbacks>({
     onPawnClick: () => {},
@@ -249,7 +273,6 @@ export function Game({ mode, onExitToMenu }: Props) {
   // Phaser's click callbacks, solved the same way here.
   const keyActionsRef = useRef<{ deselect: () => void }>({ deselect: () => {} });
   const eventsLogRef = useRef<HTMLUListElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   // The camera's pan is tracked as a WORLD-space point to look at (grid
   // coordinates, defaulting to the pitch center) rather than a raw
@@ -310,11 +333,16 @@ export function Game({ mode, onExitToMenu }: Props) {
 
   useEffect(() => {
     async function load() {
-      const fetchedTeams = await fetchTeams();
-      const [home, away] = fetchedTeams;
+      // Career mode passes explicit team ids (a specific league fixture's
+      // real teams) — load exactly those instead of always taking the first
+      // two rows off the unscoped demo-team list.
+      const [home, away] =
+        homeTeamId != null && awayTeamId != null
+          ? await Promise.all([fetchTeam(homeTeamId), fetchTeam(awayTeamId)])
+          : await fetchTeams();
       const homePlayers = await fetchPlayers(home.id);
       const awayPlayers = await fetchPlayers(away.id);
-      setTeams(fetchedTeams);
+      setTeams([home, away]);
       setMatch((prev) => ({
         ...prev,
         pawns: [...buildFormation(homePlayers, "home"), ...buildFormation(awayPlayers, "away")],
@@ -322,15 +350,13 @@ export function Game({ mode, onExitToMenu }: Props) {
       setLoading(false);
     }
     load();
-  }, []);
-
-  useEffect(() => {
-    function handleFullscreenChange() {
-      setIsFullscreen(document.fullscreenElement === wrapperRef.current);
-    }
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
+    // homeTeamId/awayTeamId only ever change across a full unmount/remount
+    // (Career.tsx's screen switch always passes through a non-"match"
+    // screen in between two different fixtures — see Career.tsx), never as
+    // a live prop update on an already-mounted Game, so including them here
+    // doesn't introduce a real re-fetch risk mid-match; it's just what
+    // satisfies exhaustive-deps honestly instead of suppressing it.
+  }, [homeTeamId, awayTeamId]);
 
   // WASD pans the camera (screen-relative: W/S move the view up/down, A/D
   // left/right). The delta itself is still applied in view-space, same as
@@ -394,14 +420,6 @@ export function Game({ mode, onExitToMenu }: Props) {
       cancelAnimationFrame(raf);
     };
   }, []);
-
-  function toggleFullscreen() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      wrapperRef.current?.requestFullscreen();
-    }
-  }
 
   function handleWheel(e: ReactWheelEvent) {
     e.preventDefault();
@@ -1165,7 +1183,7 @@ export function Game({ mode, onExitToMenu }: Props) {
     const sideName = pendingRestart.side === "home" ? teams[0]?.name : teams[1]?.name;
     const bonusTurns = SETUP_TURNS_BY_TYPE[pendingRestart.type];
     return (
-      <div className="game-wrapper handoff-screen" ref={wrapperRef}>
+      <div className="game-wrapper handoff-screen">
         <h2>
           {RESTART_TYPE_LABEL[pendingRestart.type]} for {sideName}
         </h2>
@@ -1185,7 +1203,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   if (handoff) {
     const nextSideName = match.controllingSide === "home" ? teams[1]?.name : teams[0]?.name;
     return (
-      <div className="game-wrapper handoff-screen" ref={wrapperRef}>
+      <div className="game-wrapper handoff-screen">
         <h2>Pass the computer</h2>
         <p>
           It's now <strong>{nextSideName}</strong>'s turn to plan their moves.
@@ -1200,7 +1218,7 @@ export function Game({ mode, onExitToMenu }: Props) {
   const controllingSideName = match.controllingSide === "home" ? teams[0]?.name : teams[1]?.name;
 
   return (
-    <div className="game-wrapper" ref={wrapperRef}>
+    <div className="game-wrapper">
       <div className="hud">
         <div className="hud-top-row">
           <div className="hud-top-left">
@@ -1271,7 +1289,7 @@ export function Game({ mode, onExitToMenu }: Props) {
             <button type="button" className="exit-button hud-menu-btn" onClick={onExitToMenu}>
               ← Menu
             </button>
-            <button type="button" className="exit-button fullscreen-toggle-btn" onClick={toggleFullscreen}>
+            <button type="button" className="exit-button fullscreen-toggle-btn" onClick={onToggleFullscreen}>
               {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </button>
             {mode === "solo" && (
@@ -1281,6 +1299,15 @@ export function Game({ mode, onExitToMenu }: Props) {
                 onClick={() => setTeamManagementOpen((o) => !o)}
               >
                 Team Management
+              </button>
+            )}
+            {onCareerMatchEnd && (
+              <button
+                type="button"
+                className="exit-button"
+                onClick={() => onCareerMatchEnd(match.homeScore, match.awayScore)}
+              >
+                End Match & Record Result
               </button>
             )}
             <button type="button" className="continue-button" onClick={handleReady} disabled={match.resolving}>
