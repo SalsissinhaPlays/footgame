@@ -143,6 +143,30 @@ db.exec(`
     team_id INTEGER PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
     offsets TEXT NOT NULL
   );
+
+  -- A manager: a name, a named "style" archetype, and its own copy of the
+  -- same 9 tactical fields team_tactics has (see managerGenerator.ts).
+  -- save_id-scoped, like teams/players — managers are part of one career's
+  -- world, not shared globally across saves. "Employed" isn't a column
+  -- here: a manager is employed by whichever team's manager_id (below)
+  -- points at them, unemployed ("free agent") if none does — no separate
+  -- status to keep in sync.
+  CREATE TABLE IF NOT EXISTS managers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    save_id INTEGER NOT NULL REFERENCES saves(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    style TEXT NOT NULL,
+    defensive_line_depth_frac REAL NOT NULL DEFAULT 0.4,
+    pressing_trigger_distance_mult REAL NOT NULL DEFAULT 1.0,
+    marking_coverage_frac REAL NOT NULL DEFAULT 0.5,
+    attacking_commitment_frac REAL NOT NULL DEFAULT 0.5,
+    supporting_run_depth_mult REAL NOT NULL DEFAULT 0.25,
+    shooting_range_mult REAL NOT NULL DEFAULT 1.0,
+    pass_risk_tolerance REAL NOT NULL DEFAULT 0.5,
+    cross_bias REAL NOT NULL DEFAULT 0.4,
+    sprint_aggressiveness REAL NOT NULL DEFAULT 0.5,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // CREATE TABLE IF NOT EXISTS is a no-op against a DB that already exists on
@@ -181,6 +205,13 @@ ensureColumn("saves", "season", "season INTEGER NOT NULL DEFAULT 1");
 // starterLeague.ts and POST /api/saves) — null only briefly between a save
 // being created and the choice actually being made.
 ensureColumn("saves", "user_team_id", "user_team_id INTEGER REFERENCES teams(id)");
+// Nullable: the player's own team is never assigned a manager (the human
+// manages it directly, every match, by hand) — only the AI-controlled
+// rivals get one. NULL also naturally covers every team that existed
+// before this system did, with zero backfill needed (see managers'
+// own comment above) — a team with no manager just keeps whatever
+// tactics its team_tactics row already had (the pre-manager default).
+ensureColumn("teams", "manager_id", "manager_id INTEGER REFERENCES managers(id)");
 
 function seedIfEmpty() {
   const teamCount = db.prepare("SELECT COUNT(*) AS n FROM teams").get() as { n: number };

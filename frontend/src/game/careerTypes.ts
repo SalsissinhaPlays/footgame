@@ -58,6 +58,41 @@ export interface TeamTacticsDTO {
   sprint_aggressiveness: number;
 }
 
+/**
+ * A manager's own tactical profile (same 9 fields as TeamTacticsDTO,
+ * duplicated rather than nested — see managers' own backend table
+ * comment for why: a manager owns their tactics intrinsically, a team
+ * just borrows whichever manager's currently assigned). `team_id`/
+ * `team_name` are null for a free agent — nobody currently employs them.
+ */
+export interface ManagerDTO {
+  id: number;
+  save_id: number;
+  name: string;
+  style: string;
+  defensive_line_depth_frac: number;
+  pressing_trigger_distance_mult: number;
+  marking_coverage_frac: number;
+  attacking_commitment_frac: number;
+  supporting_run_depth_mult: number;
+  shooting_range_mult: number;
+  pass_risk_tolerance: number;
+  cross_bias: number;
+  sprint_aggressiveness: number;
+  created_at: string;
+  team_id: number | null;
+  team_name: string | null;
+}
+
+/** One club's manager getting sacked and replaced — see careerApi.ts's advanceSeason. */
+export interface ManagerFiring {
+  team_id: number;
+  team_name: string;
+  old_manager_name: string;
+  new_manager_name: string;
+  new_style: string;
+}
+
 export interface TopScorerRow {
   player_id: number;
   player_name: string;

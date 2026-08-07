@@ -1,5 +1,15 @@
 import type { PlayerDTO, TeamDTO } from "./types";
-import type { SaveDTO, LeagueDTO, FixtureDTO, StandingRow, TeamTacticsDTO, TopScorerRow, TransferDTO } from "./careerTypes";
+import type {
+  SaveDTO,
+  LeagueDTO,
+  FixtureDTO,
+  ManagerDTO,
+  ManagerFiring,
+  StandingRow,
+  TeamTacticsDTO,
+  TopScorerRow,
+  TransferDTO,
+} from "./careerTypes";
 import type { TacticalProfile } from "./tacticalProfile";
 
 // Same relative, same-origin path as api.ts (Vite proxies /api to the
@@ -206,9 +216,21 @@ export function simulateRound(leagueId: number, round: number): Promise<FixtureD
   }).then(json<FixtureDTO[]>);
 }
 
-/** Only valid once every fixture in the save's current league has a recorded score — creates next season's league + fixtures for the same teams. */
-export function advanceSeason(saveId: number): Promise<LeagueDTO> {
-  return fetch(`${API_BASE}/saves/${saveId}/advance-season`, { method: "POST" }).then(json<LeagueDTO>);
+/**
+ * Only valid once every fixture in the save's current league has a
+ * recorded score — creates next season's league + fixtures for the same
+ * teams. `firings` reports any AI clubs whose manager got sacked and
+ * replaced as part of this rollover, weighted by how they finished — see
+ * the backend's fireAndRehireManager.
+ */
+export function advanceSeason(saveId: number): Promise<LeagueDTO & { firings: ManagerFiring[] }> {
+  return fetch(`${API_BASE}/saves/${saveId}/advance-season`, { method: "POST" }).then(
+    json<LeagueDTO & { firings: ManagerFiring[] }>
+  );
+}
+
+export function fetchManagers(saveId: number): Promise<ManagerDTO[]> {
+  return fetch(`${API_BASE}/saves/${saveId}/managers`).then(json<ManagerDTO[]>);
 }
 
 // --- Team tactics ---

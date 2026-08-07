@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { advanceSeason, fetchFixtures, fetchSave, fetchSaveLeagues, fetchSaveTeams } from "../../game/careerApi";
-import type { FixtureDTO, LeagueDTO, SaveDTO } from "../../game/careerTypes";
+import type { FixtureDTO, LeagueDTO, ManagerFiring, SaveDTO } from "../../game/careerTypes";
 import type { TeamDTO } from "../../game/types";
 import "./career.css";
 
@@ -9,6 +9,7 @@ interface Props {
   onOpenCalendar: (leagueId: number) => void;
   onOpenTeamManagement: (teamId: number) => void;
   onOpenTactics: (teamId: number) => void;
+  onOpenManagers: () => void;
   /**
    * Launches the fixture as a real interactive match — see Career.tsx's
    * "match" screen. Passes the user's own team id too: a fixture's
@@ -39,6 +40,7 @@ export function ClubHome({
   onOpenCalendar,
   onOpenTeamManagement,
   onOpenTactics,
+  onOpenManagers,
   onPlayFixture,
   onSave,
   onExit,
@@ -49,6 +51,7 @@ export function ClubHome({
   const [teams, setTeams] = useState<TeamDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [advancing, setAdvancing] = useState(false);
+  const [lastFirings, setLastFirings] = useState<ManagerFiring[]>([]);
 
   function reload() {
     fetchSave(saveId)
@@ -93,7 +96,8 @@ export function ClubHome({
     setError(null);
     setAdvancing(true);
     try {
-      await advanceSeason(saveId);
+      const result = await advanceSeason(saveId);
+      setLastFirings(result.firings);
       reload();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -115,6 +119,23 @@ export function ClubHome({
       )}
 
       {error && <p className="career-error">{error}</p>}
+
+      {lastFirings.length > 0 && (
+        <div className="career-section career-firings-banner">
+          <h2>Managerial changes this season</h2>
+          <ul className="career-list">
+            {lastFirings.map((f) => (
+              <li key={f.team_id} className="career-manager-row">
+                <span className="career-manager-team">{f.team_name}</span>
+                <span className="career-manager-name">
+                  {f.old_manager_name} out, {f.new_manager_name} in
+                </span>
+                <span className="career-manager-style">{f.new_style}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="career-home-options">
         <button type="button" className="career-home-button" disabled title="Coming soon — needs a market/events system first.">
@@ -164,6 +185,9 @@ export function ClubHome({
           onClick={() => userTeamId != null && onOpenTactics(userTeamId)}
         >
           Tactics
+        </button>
+        <button type="button" className="career-home-button" onClick={onOpenManagers}>
+          Managers
         </button>
         <button type="button" className="career-home-button career-home-button-secondary" onClick={onSave}>
           Save

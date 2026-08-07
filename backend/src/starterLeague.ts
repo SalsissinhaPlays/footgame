@@ -29,12 +29,15 @@ const TEAM_PREFIXES = [
 ];
 const TEAM_SUFFIXES = ["United", "City", "Athletic", "Rovers", "Wanderers", "Albion", "Rangers", "Town"];
 
-const FIRST_NAMES = [
+// Exported so managerGenerator.ts can build names from the same pool
+// without a second, driftable copy — a manager's name has no other reason
+// to look different from a player's.
+export const FIRST_NAMES = [
   "Lucas", "Mateus", "Diego", "Rafael", "Bruno", "Thiago", "Gabriel", "Felipe",
   "Andre", "Carlos", "Marco", "Luca", "Antoine", "Kwame", "Amara", "Kofi",
   "Jamal", "Malik", "Sven", "Erik", "Viktor", "Dimitri", "Ivan", "Yusuf",
 ];
-const LAST_NAMES = [
+export const LAST_NAMES = [
   "Silva", "Santos", "Oliveira", "Costa", "Pereira", "Rodrigues", "Almeida", "Nascimento",
   "Ferreira", "Souza", "Martins", "Rocha", "Dubois", "Mensah", "Osei", "Diallo",
   "Traore", "Larsson", "Berg", "Novak", "Petrov", "Volkov", "Demir", "Aksoy",

@@ -4,6 +4,7 @@ import { db } from "./db.js";
 import { generateRoundRobin } from "./fixtures.js";
 import { generateStarterLeague } from "./starterLeague.js";
 import { computeTeamStrength, simulateScore, type PlayerAttrs } from "./quickSim.js";
+import { generateManager, TACTIC_FIELDS, type TacticFields } from "./managerGenerator.js";
 
 const app = express();
 app.use(cors());
@@ -93,6 +94,32 @@ app.post("/api/saves", (req, res) => {
       }
     }
 
+    // A manager per team, right from kickoff — otherwise the whole system
+    // is invisible until the player manually visits all 11 rivals' Tactics
+    // screens and hand-tunes each one, which nobody's going to do. Every
+    // team gets one here, including whichever the player eventually picks
+    // — there's no way to know that yet (user_team_id is still null; the
+    // choice happens later via ChooseTeam/TeamPreview). PATCH /api/saves/:id
+    // clears the chosen team's manager_id the moment user_team_id is set,
+    // since the human manages that one directly, every match, by hand.
+    const insertManager = db.prepare(
+      `INSERT INTO managers (save_id, name, style, ${TACTIC_FIELDS.join(", ")})
+       VALUES (?, ?, ?, ${TACTIC_FIELDS.map(() => "?").join(", ")})`
+    );
+    for (const teamId of teamIds) {
+      const generated = generateManager();
+      const managerId = Number(
+        insertManager.run(
+          saveId,
+          generated.name,
+          generated.style,
+          ...TACTIC_FIELDS.map((f) => generated.tactics[f])
+        ).lastInsertRowid
+      );
+      db.prepare("UPDATE teams SET manager_id = ? WHERE id = ?").run(managerId, teamId);
+      upsertTeamTactics(teamId, generated.tactics);
+    }
+
     const leagueId = Number(
       db.prepare("INSERT INTO leagues (save_id, name, season) VALUES (?, ?, 1)").run(saveId, "Season 1 League")
         .lastInsertRowid
@@ -140,6 +167,13 @@ app.patch("/api/saves/:id", (req, res) => {
     return;
   }
   db.prepare("UPDATE saves SET user_team_id = ? WHERE id = ?").run(userTeamId, req.params.id);
+  // Every starter team got an auto-generated manager (see POST /api/saves) —
+  // including whichever one the player just picked, since there was no way
+  // to know that in advance. Clear it now: the human manages this club
+  // directly, every match, by hand. The manager isn't deleted, just
+  // unassigned — they fall back into the free-agent pool other clubs can
+  // hire from later (see the season-rollover firing logic).
+  db.prepare("UPDATE teams SET manager_id = NULL WHERE id = ?").run(userTeamId);
   res.json(db.prepare("SELECT * FROM saves WHERE id = ?").get(req.params.id));
 });
 
@@ -644,10 +678,35 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
     }[]
   ).map((r) => r.team_id);
 
+  // The just-finished season's final table — used only to weight the
+  // manager-firing pass below, computed before the transaction since it's
+  // a pure read of data that isn't changing.
+  const finishedStandings = computeStandings(currentLeague.id);
+
   const nextSeason = currentLeague.season + 1;
   let newLeagueId: number;
+  const firings: { team_id: number; team_name: string; old_manager_name: string; new_manager_name: string; new_style: string }[] = [];
   db.exec("BEGIN");
   try {
+    // Autonomous manager firing, weighted by how the just-finished season
+    // went — bottom-of-the-table teams get sacked far more often than
+    // title challengers, matching how this actually works in real
+    // football. Only ever touches AI-controlled teams: the player's own
+    // club has no manager_id to begin with (see PATCH /api/saves/:id), so
+    // fireAndRehireManager is a no-op for it. Deliberately runs BEFORE the
+    // new season's fixtures are generated below, so a newly-hired
+    // manager's tactics are already in place for their very first fixture.
+    const totalTeams = finishedStandings.length;
+    for (let i = 0; i < finishedStandings.length; i++) {
+      const row = finishedStandings[i];
+      const rank = i + 1;
+      const fracFromBottom = totalTeams > 1 ? (totalTeams - rank) / (totalTeams - 1) : 1;
+      const fireChance = fracFromBottom <= 0.25 ? 0.5 : fracFromBottom <= 0.6 ? 0.2 : 0.05;
+      if (Math.random() >= fireChance) continue;
+      const result = fireAndRehireManager(row.team_id, Number(req.params.id));
+      if (result) firings.push({ team_id: row.team_id, team_name: row.team_name, ...result });
+    }
+
     newLeagueId = Number(
       db
         .prepare("INSERT INTO leagues (save_id, name, season) VALUES (?, ?, ?)")
@@ -669,7 +728,8 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
     throw err;
   }
 
-  res.status(201).json(db.prepare("SELECT * FROM leagues WHERE id = ?").get(newLeagueId));
+  const newLeague = db.prepare("SELECT * FROM leagues WHERE id = ?").get(newLeagueId);
+  res.status(201).json({ ...(newLeague as object), firings });
 });
 
 // --- Standings ---
@@ -690,19 +750,20 @@ interface StandingRow {
   points: number;
 }
 
-app.get("/api/leagues/:id/standings", (req, res) => {
-  const league = db.prepare("SELECT id FROM leagues WHERE id = ?").get(req.params.id);
-  if (!league) {
-    res.status(404).json({ error: "league not found" });
-    return;
-  }
+/**
+ * Shared by the standings endpoint below and the season-rollover firing
+ * logic (which needs a finished season's final table to decide who's on
+ * the hot seat) — factored out specifically so both read the exact same
+ * computation, not two copies that could drift.
+ */
+function computeStandings(leagueId: number): StandingRow[] {
   const teams = db
     .prepare(
       `SELECT teams.id, teams.name FROM teams
        JOIN league_teams ON league_teams.team_id = teams.id
        WHERE league_teams.league_id = ?`
     )
-    .all(req.params.id) as { id: number; name: string }[];
+    .all(leagueId) as { id: number; name: string }[];
 
   const table = new Map<number, StandingRow>(
     teams.map((t) => [
@@ -726,7 +787,7 @@ app.get("/api/leagues/:id/standings", (req, res) => {
     .prepare(
       "SELECT * FROM fixtures WHERE league_id = ? AND home_score IS NOT NULL AND away_score IS NOT NULL"
     )
-    .all(req.params.id) as {
+    .all(leagueId) as {
     home_team_id: number;
     away_team_id: number;
     home_score: number;
@@ -764,7 +825,16 @@ app.get("/api/leagues/:id/standings", (req, res) => {
     (a, b) =>
       b.points - a.points || b.goal_difference - a.goal_difference || b.goals_for - a.goals_for || a.team_name.localeCompare(b.team_name)
   );
-  res.json(rows);
+  return rows;
+}
+
+app.get("/api/leagues/:id/standings", (req, res) => {
+  const league = db.prepare("SELECT id FROM leagues WHERE id = ?").get(req.params.id);
+  if (!league) {
+    res.status(404).json({ error: "league not found" });
+    return;
+  }
+  res.json(computeStandings(Number(req.params.id)));
 });
 
 /**
@@ -803,19 +873,7 @@ app.get("/api/leagues/:id/top-scorers", (req, res) => {
 // these same defaults — see db.ts's team_tactics comment for why that
 // means zero migration/backfill is needed for already-existing teams.
 
-const TACTIC_FIELDS = [
-  "defensive_line_depth_frac",
-  "pressing_trigger_distance_mult",
-  "marking_coverage_frac",
-  "attacking_commitment_frac",
-  "supporting_run_depth_mult",
-  "shooting_range_mult",
-  "pass_risk_tolerance",
-  "cross_bias",
-  "sprint_aggressiveness",
-] as const;
-
-const DEFAULT_TACTICS: Record<(typeof TACTIC_FIELDS)[number], number> = {
+const DEFAULT_TACTICS: TacticFields = {
   defensive_line_depth_frac: 0.4,
   pressing_trigger_distance_mult: 1.0,
   marking_coverage_frac: 0.5,
@@ -826,6 +884,21 @@ const DEFAULT_TACTICS: Record<(typeof TACTIC_FIELDS)[number], number> = {
   cross_bias: 0.4,
   sprint_aggressiveness: 0.5,
 };
+
+/**
+ * Shared by the manual PUT endpoint below, save-creation's auto-assignment,
+ * and the season-rollover firing logic — every place a team's tactics
+ * actually change funnels through this one upsert so they can never drift
+ * out of sync with each other.
+ */
+function upsertTeamTactics(teamId: number, fields: TacticFields) {
+  const values = TACTIC_FIELDS.map((field) => fields[field]);
+  db.prepare(
+    `INSERT INTO team_tactics (team_id, ${TACTIC_FIELDS.join(", ")})
+     VALUES (?, ${TACTIC_FIELDS.map(() => "?").join(", ")})
+     ON CONFLICT(team_id) DO UPDATE SET ${TACTIC_FIELDS.map((f) => `${f} = excluded.${f}`).join(", ")}`
+  ).run(teamId, ...values);
+}
 
 app.get("/api/teams/:id/tactics", (req, res) => {
   const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
@@ -845,17 +918,100 @@ app.put("/api/teams/:id/tactics", (req, res) => {
     res.status(404).json({ error: "team not found" });
     return;
   }
-  const values = TACTIC_FIELDS.map((field) => {
+  const fields = {} as TacticFields;
+  for (const field of TACTIC_FIELDS) {
     const v = req.body?.[field];
-    return typeof v === "number" && Number.isFinite(v) ? v : DEFAULT_TACTICS[field];
-  });
-  db.prepare(
-    `INSERT INTO team_tactics (team_id, ${TACTIC_FIELDS.join(", ")})
-     VALUES (?, ${TACTIC_FIELDS.map(() => "?").join(", ")})
-     ON CONFLICT(team_id) DO UPDATE SET ${TACTIC_FIELDS.map((f) => `${f} = excluded.${f}`).join(", ")}`
-  ).run(req.params.id, ...values);
+    fields[field] = typeof v === "number" && Number.isFinite(v) ? v : DEFAULT_TACTICS[field];
+  }
+  upsertTeamTactics(Number(req.params.id), fields);
   res.json(db.prepare("SELECT * FROM team_tactics WHERE team_id = ?").get(req.params.id));
 });
+
+// --- Managers ---
+// Read-only from the frontend today — there's no player-facing hire/fire
+// UI (see POST /api/saves and the season-rollover firing logic below for
+// the two places a manager actually gets assigned/replaced). This is
+// purely "who manages whom right now," for a browsable Managers screen.
+
+app.get("/api/saves/:id/managers", (req, res) => {
+  const save = db.prepare("SELECT id FROM saves WHERE id = ?").get(req.params.id);
+  if (!save) {
+    res.status(404).json({ error: "save not found" });
+    return;
+  }
+  const rows = db
+    .prepare(
+      `SELECT managers.*, teams.id AS team_id, teams.name AS team_name
+       FROM managers
+       LEFT JOIN teams ON teams.manager_id = managers.id
+       WHERE managers.save_id = ?
+       ORDER BY teams.name IS NULL, teams.name, managers.name`
+    )
+    .all(req.params.id);
+  res.json(rows);
+});
+
+/**
+ * Fires whoever currently manages `teamId` (a no-op if the team has no
+ * manager — the player's own club, always) and replaces them: prefers an
+ * existing free agent from this save (a manager some OTHER firing already
+ * let go, or one nobody's hired yet) over generating a brand new one, so a
+ * small pool of recognizable "journeyman" managers can organically
+ * circulate between clubs over multiple seasons instead of every firing
+ * minting an unrelated newcomer. Re-syncs team_tactics to the new
+ * manager's profile either way — this is the one place a fired team's
+ * on-pitch tactics actually change. Called from advance-season, inside its
+ * existing transaction.
+ */
+function fireAndRehireManager(
+  teamId: number,
+  saveId: number
+): { old_manager_name: string; new_manager_name: string; new_style: string } | null {
+  const team = db.prepare("SELECT manager_id FROM teams WHERE id = ?").get(teamId) as { manager_id: number | null };
+  if (!team.manager_id) return null;
+  const oldManager = db.prepare("SELECT name FROM managers WHERE id = ?").get(team.manager_id) as { name: string };
+
+  db.prepare("UPDATE teams SET manager_id = NULL WHERE id = ?").run(teamId);
+
+  const freeAgent = db
+    .prepare(
+      `SELECT id FROM managers
+       WHERE save_id = ? AND id != ?
+         AND id NOT IN (SELECT manager_id FROM teams WHERE manager_id IS NOT NULL)
+       ORDER BY RANDOM() LIMIT 1`
+    )
+    .get(saveId, team.manager_id) as { id: number } | undefined;
+
+  let newManagerId: number;
+  if (freeAgent) {
+    newManagerId = freeAgent.id;
+  } else {
+    const generated = generateManager();
+    newManagerId = Number(
+      db
+        .prepare(
+          `INSERT INTO managers (save_id, name, style, ${TACTIC_FIELDS.join(", ")})
+           VALUES (?, ?, ?, ${TACTIC_FIELDS.map(() => "?").join(", ")})`
+        )
+        .run(saveId, generated.name, generated.style, ...TACTIC_FIELDS.map((f) => generated.tactics[f])).lastInsertRowid
+    );
+  }
+  db.prepare("UPDATE teams SET manager_id = ? WHERE id = ?").run(newManagerId, teamId);
+
+  const newManager = db.prepare("SELECT * FROM managers WHERE id = ?").get(newManagerId) as Record<
+    string,
+    string | number
+  >;
+  const fields = {} as TacticFields;
+  for (const field of TACTIC_FIELDS) fields[field] = newManager[field] as number;
+  upsertTeamTactics(teamId, fields);
+
+  return {
+    old_manager_name: oldManager.name,
+    new_manager_name: newManager.name as string,
+    new_style: newManager.style as string,
+  };
+}
 
 // --- Corner-kick presets ---
 // offsets is stored as an opaque JSON blob — the frontend is the only thing

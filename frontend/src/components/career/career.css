@@ -471,6 +471,49 @@
   color: #888;
 }
 
+/* --- Managers --- */
+
+.career-firings-banner {
+  border: 1px solid #ffe0b2;
+  background: #fff8e1;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.career-firings-banner h2 {
+  margin-top: 0;
+}
+
+
+.career-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.career-manager-team {
+  flex: 1;
+  font-weight: 700;
+}
+
+.career-manager-name {
+  flex: 1;
+  color: #444;
+}
+
+.career-manager-style {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
 /* --- Lineup selection (starting XI badge on each roster row) --- */
 
 .career-lineup-badge {

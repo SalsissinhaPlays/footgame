@@ -13,6 +13,7 @@ import { TeamManagement } from "./TeamManagement";
 import { Calendar } from "./Calendar";
 import { LineupSelect } from "./LineupSelect";
 import { TeamTactics } from "./TeamTactics";
+import { Managers } from "./Managers";
 
 /**
  * Owns navigation between the career screens as a small explicit stack —
@@ -39,6 +40,7 @@ type CareerScreen =
   | { name: "clubHome"; saveId: number }
   | { name: "teamManagement"; saveId: number; teamId: number }
   | { name: "tactics"; saveId: number; teamId: number }
+  | { name: "managers"; saveId: number }
   | { name: "calendar"; saveId: number; leagueId: number }
   | { name: "lineup"; saveId: number; leagueId: number; fixture: FixtureDTO; userTeamId: number; opponentName: string }
   | {
@@ -118,6 +120,7 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
           onOpenCalendar={(leagueId) => setScreen({ name: "calendar", saveId: screen.saveId, leagueId })}
           onOpenTeamManagement={(teamId) => setScreen({ name: "teamManagement", saveId: screen.saveId, teamId })}
           onOpenTactics={(teamId) => setScreen({ name: "tactics", saveId: screen.saveId, teamId })}
+          onOpenManagers={() => setScreen({ name: "managers", saveId: screen.saveId })}
           onPlayFixture={(fixture, leagueId, userTeamId, opponentName) =>
             setScreen({ name: "lineup", saveId: screen.saveId, leagueId, fixture, userTeamId, opponentName })
           }
@@ -136,6 +139,10 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
     case "tactics":
       return (
         <TeamTactics teamId={screen.teamId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />
+      );
+    case "managers":
+      return (
+        <Managers saveId={screen.saveId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />
       );
     case "calendar":
       return <Calendar leagueId={screen.leagueId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />;
