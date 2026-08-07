@@ -17,6 +17,11 @@ export interface Formation {
   slots: FormationSlot[];
 }
 
+/** A saved base-lineup slot (see the Team Management Formation screen / backend's team_lineups table) — a FormationSlot pinned to a SPECIFIC player, not just a position category. `position` is still carried alongside `playerId` (the player's PlayerDTO.position at save time) so a vacated slot — one whose player isn't in a given match's confirmed starting lineup — can still be filled by a sensibly-matching substitute via formation.ts's ordinary position-matching, without a second roster fetch. */
+export interface LineupSlot extends FormationSlot {
+  playerId: number;
+}
+
 /** The only formation in use today — a 6-a-side GK/DEF/DEF/MID/MID/FWD shape, same positions the game has always used. */
 export const FORMATION_6V6_DEFAULT: Formation = {
   slots: [

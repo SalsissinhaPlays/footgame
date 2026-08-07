@@ -647,3 +647,134 @@
   border-radius: 5px;
   font-size: 13px;
 }
+
+/* --- Team Management: Formation page (side-arrow paged, see the header's
+   arrow buttons) --- */
+
+.career-team-mgmt-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.career-page-arrow {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  color: #1a1a1a;
+  width: 32px;
+  height: 32px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.career-page-arrow:hover {
+  background: #f0f0f0;
+}
+
+.career-page-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.career-page-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ddd;
+}
+
+.career-page-dot.active {
+  background: #2e7d32;
+}
+
+.career-formation-editor {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.career-formation-roster {
+  width: 260px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.career-formation-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.career-formation-row.starter {
+  background: #e8f5e9;
+  border-color: #a5d6a7;
+}
+
+.career-formation-row.empty {
+  background: #fafafa;
+  border-style: dashed;
+}
+
+.career-formation-row.bench {
+  background: #fff;
+  cursor: grab;
+}
+
+.career-formation-row.bench:active {
+  cursor: grabbing;
+}
+
+.career-formation-row.bench:hover {
+  background: #f6f6f6;
+}
+
+.career-formation-pos {
+  font-size: 11px;
+  font-weight: 700;
+  color: #888;
+  width: 28px;
+  flex: 0 0 auto;
+}
+
+.career-formation-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.career-formation-bench-label {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.career-formation-pitch-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.career-formation-pitch {
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.career-formation-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

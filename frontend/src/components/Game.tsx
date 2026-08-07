@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
 import { fetchPlayers, fetchTeam, fetchTeams } from "../game/api";
-import { fetchCornerPreset, fetchTeamTactics, saveCornerPreset, toTacticalProfile } from "../game/careerApi";
+import { fetchCornerPreset, fetchTeamLineup, fetchTeamTactics, saveCornerPreset, toTacticalProfile } from "../game/careerApi";
 import type { CornerOffset } from "../game/careerApi";
 import { DEFAULT_TACTICAL_PROFILE } from "../game/tacticalProfile";
 import type { TacticalProfile } from "../game/tacticalProfile";
@@ -19,7 +19,7 @@ import {
   TACKLE_COOLDOWN_TURNS,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
-import { buildFormation } from "../game/formation";
+import { buildFormation, buildFormationFromLineup } from "../game/formation";
 import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { chargesFor, resolveTurn } from "../game/resolve";
 import type { DeadBallResult, GoalScorer } from "../game/resolve";
@@ -446,21 +446,30 @@ export function Game({
       // the full roster (buildFormation's own default ordering) whenever no
       // lineup was chosen, e.g. hotseat/AI/solo modes that never pass this.
       // Applies to whichever side is humanSide, not always "home" — the AI
-      // side never gets a lineup choice regardless of which pitch side it's on.
+      // side never gets a lineup choice (or a saved formation shape — that's
+      // a Team Management concept, not something the AI has any use for)
+      // regardless of which pitch side it's on.
       const humanRoster = humanSide === "home" ? homePlayers : awayPlayers;
-      const startingHumanPlayers =
-        humanStartingPlayerIds && humanStartingPlayerIds.length > 0
-          ? humanRoster.filter((p) => humanStartingPlayerIds.includes(p.id))
-          : humanRoster;
-      const finalHomePlayers = humanSide === "home" ? startingHumanPlayers : homePlayers;
-      const finalAwayPlayers = humanSide === "away" ? startingHumanPlayers : awayPlayers;
-      const homeFormation = buildFormation(finalHomePlayers, "home");
-      const awayFormation = buildFormation(finalAwayPlayers, "away");
-      setBenchedPlayers(
-        humanStartingPlayerIds && humanStartingPlayerIds.length > 0
-          ? humanRoster.filter((p) => !humanStartingPlayerIds.includes(p.id))
-          : []
-      );
+      const hasLineupChoice = !!humanStartingPlayerIds && humanStartingPlayerIds.length > 0;
+      // Only fetched in career mode (a lineup choice implies one) — the
+      // human's own saved base formation (see Team Management's Formation
+      // page), used to seed on-pitch positions instead of the generic
+      // FORMATION_6V6_DEFAULT shape whenever one exists and actually covers
+      // the confirmed starting 6 (buildFormationFromLineup itself falls
+      // back cleanly otherwise — see that function's own doc comment).
+      const savedLineupSlots = hasLineupChoice
+        ? await fetchTeamLineup(humanSide === "home" ? home.id : away.id)
+            .then((dto) => dto.slots)
+            .catch(() => null)
+        : null;
+      const humanFormation = hasLineupChoice
+        ? buildFormationFromLineup(humanRoster, humanSide, humanStartingPlayerIds!, savedLineupSlots)
+        : buildFormation(humanRoster, humanSide);
+      const aiRoster = humanSide === "home" ? awayPlayers : homePlayers;
+      const aiFormation = buildFormation(aiRoster, aiSide);
+      const homeFormation = humanSide === "home" ? humanFormation : aiFormation;
+      const awayFormation = humanSide === "away" ? humanFormation : aiFormation;
+      setBenchedPlayers(hasLineupChoice ? humanRoster.filter((p) => !humanStartingPlayerIds!.includes(p.id)) : []);
       // Coin toss for the match's TRUE opening kickoff only — resolve.ts's
       // carrier is whoever starts within CAPTURE_RADIUS of the ball, and
       // both sides' formation forwards sit well outside that radius (a

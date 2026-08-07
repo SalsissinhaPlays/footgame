@@ -1047,6 +1047,40 @@ app.put("/api/teams/:id/corner-preset", (req, res) => {
   res.json({ team_id: Number(req.params.id), offsets: req.body.offsets });
 });
 
+// --- Base lineup / formation ---
+// slots is stored as an opaque JSON blob (see db.ts's team_lineups comment
+// for the shape and coordinate frame) — same reasoning as corner presets
+// above, the frontend is the only thing that ever interprets it.
+
+app.get("/api/teams/:id/lineup", (req, res) => {
+  const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
+  if (!team) {
+    res.status(404).json({ error: "team not found" });
+    return;
+  }
+  const row = db.prepare("SELECT slots FROM team_lineups WHERE team_id = ?").get(req.params.id) as
+    | { slots: string }
+    | undefined;
+  res.json({ team_id: Number(req.params.id), slots: row ? JSON.parse(row.slots) : null });
+});
+
+app.put("/api/teams/:id/lineup", (req, res) => {
+  const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
+  if (!team) {
+    res.status(404).json({ error: "team not found" });
+    return;
+  }
+  if (!Array.isArray(req.body?.slots)) {
+    res.status(400).json({ error: "slots array is required" });
+    return;
+  }
+  db.prepare(
+    `INSERT INTO team_lineups (team_id, slots) VALUES (?, ?)
+     ON CONFLICT(team_id) DO UPDATE SET slots = excluded.slots`
+  ).run(req.params.id, JSON.stringify(req.body.slots));
+  res.json({ team_id: Number(req.params.id), slots: req.body.slots });
+});
+
 const PORT = 3001;
 app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);

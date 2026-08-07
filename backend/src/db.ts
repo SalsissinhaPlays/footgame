@@ -144,6 +144,26 @@ db.exec(`
     offsets TEXT NOT NULL
   );
 
+  -- A team's saved base lineup + formation shape, set via the Team
+  -- Management "Formation" screen (drag-and-drop on a static pitch) and
+  -- used to seed a career match's kickoff instead of the generic
+  -- first-6-by-jersey-number fallback. slots is a JSON array of exactly
+  -- roster-size-worth of { player_id, position, x, y } entries — x/y are in
+  -- the same "home orientation" coordinate frame formations.ts's
+  -- FORMATION_6V6_DEFAULT already uses (mirrored for the away side by
+  -- formation.ts, same as any other formation), and position is the
+  -- player's PlayerDTO.position at save time — kept alongside player_id so
+  -- a match-day substitute (picked via LineupSelect but not part of this
+  -- saved lineup) can still be slotted into a sensibly-matching vacated
+  -- spot via the same position-matching assignSlots already uses elsewhere,
+  -- rather than needing a second roster fetch just to re-derive it. An
+  -- opaque JSON blob, same reasoning as team_corner_presets above — the
+  -- frontend is the only thing that ever interprets it.
+  CREATE TABLE IF NOT EXISTS team_lineups (
+    team_id INTEGER PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+    slots TEXT NOT NULL
+  );
+
   -- A manager: a name, a named "style" archetype, and its own copy of the
   -- same 9 tactical fields team_tactics has (see managerGenerator.ts).
   -- save_id-scoped, like teams/players — managers are part of one career's

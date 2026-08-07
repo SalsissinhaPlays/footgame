@@ -1,6 +1,6 @@
 import { GRID_COLS } from "./constants";
 import { FORMATION_6V6_DEFAULT } from "./formations";
-import type { Formation } from "./formations";
+import type { Formation, FormationSlot, LineupSlot } from "./formations";
 import type { Pawn, PlayerDTO, Side, Vec2 } from "./types";
 
 function mirrorX(x: number): number {
@@ -33,10 +33,9 @@ function assignSlots(players: PlayerDTO[], formation: Formation): { player: Play
   return result;
 }
 
-export function buildFormation(players: PlayerDTO[], side: Side, formation: Formation = FORMATION_6V6_DEFAULT): Pawn[] {
-  return assignSlots(players, formation).map(({ player, pos: slotPos }) => {
+function toPawns(assigned: { player: PlayerDTO; pos: Vec2 }[], side: Side): Pawn[] {
+  return assigned.map(({ player, pos: slotPos }) => {
     const pos: Vec2 = side === "home" ? { ...slotPos } : { x: mirrorX(slotPos.x), y: slotPos.y };
-
     return {
       id: `${side}-${player.id}`,
       player,
@@ -50,4 +49,63 @@ export function buildFormation(players: PlayerDTO[], side: Side, formation: Form
       tackleCooldown: 0,
     };
   });
+}
+
+export function buildFormation(players: PlayerDTO[], side: Side, formation: Formation = FORMATION_6V6_DEFAULT): Pawn[] {
+  return toPawns(assignSlots(players, formation), side);
+}
+
+/**
+ * Like buildFormation, but seeded from a team's saved base lineup (see the
+ * Team Management Formation screen / backend's team_lineups table) instead
+ * of a generic position-shaped Formation — each saved slot is pinned to a
+ * SPECIFIC player, not just a position category. `startingPlayerIds` is
+ * LineupSelect's confirmed starting 6 for this match, which may differ from
+ * the saved lineup (the player swapped a tired starter out) — a saved
+ * slot whose player isn't in `startingPlayerIds` is "vacated," and whichever
+ * confirmed starter isn't covered by an unvacated saved slot ("newcomers")
+ * fills those vacated slots via the same position-matching `assignSlots`
+ * already uses everywhere else, so a substitute lands somewhere sensible
+ * (a DEF replacing a DEF) rather than at a arbitrary/default spot.
+ *
+ * `vacated.length` always exactly equals `newcomers.length` by construction
+ * (both are `savedSlots.length - kept.length`) whenever `savedSlots.length
+ * === startingPlayerIds.length`, which is the only case this function
+ * handles specially — a length mismatch (no saved lineup yet, or the
+ * roster's squad size changed since one was saved) falls back to the
+ * ordinary, well-understood `buildFormation` default entirely rather than
+ * guessing at a partial reconciliation.
+ */
+export function buildFormationFromLineup(
+  players: PlayerDTO[],
+  side: Side,
+  startingPlayerIds: number[],
+  savedSlots: LineupSlot[] | null
+): Pawn[] {
+  if (!savedSlots || savedSlots.length !== startingPlayerIds.length) {
+    return buildFormation(players, side);
+  }
+
+  const startingSet = new Set(startingPlayerIds);
+  const byId = new Map(players.map((p) => [p.id, p]));
+
+  const kept: { player: PlayerDTO; pos: Vec2 }[] = [];
+  const vacated: FormationSlot[] = [];
+  for (const slot of savedSlots) {
+    const player = startingSet.has(slot.playerId) ? byId.get(slot.playerId) : undefined;
+    if (player) {
+      kept.push({ player, pos: slot.pos });
+    } else {
+      vacated.push({ position: slot.position, pos: slot.pos });
+    }
+  }
+
+  const keptIds = new Set(kept.map((k) => k.player.id));
+  const newcomers = startingPlayerIds
+    .map((id) => byId.get(id))
+    .filter((p): p is PlayerDTO => p != null && !keptIds.has(p.id));
+
+  const assignedNewcomers = assignSlots(newcomers, { slots: vacated });
+
+  return toPawns([...kept, ...assignedNewcomers], side);
 }

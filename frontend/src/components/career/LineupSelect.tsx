@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchPlayers } from "../../game/api";
+import { fetchTeamLineup } from "../../game/careerApi";
 import type { PlayerDTO } from "../../game/types";
 import "./career.css";
 
@@ -17,10 +18,12 @@ interface Props {
  * "who starts" was never a choice at all — buildFormation's assignSlots
  * just walked the roster in whatever order the backend returned it
  * (jersey_number), so which 6 of a 12-player career squad actually took
- * the pitch was an accident of jersey numbering. Defaults to that exact
- * same first-6-by-jersey-number selection, pre-checked, so a player who
- * doesn't care can confirm immediately — this only matters once someone
- * actually wants to bench their backup GK or start a different striker.
+ * the pitch was an accident of jersey numbering. Defaults to the team's
+ * saved base lineup (see Team Management's Formation page) when one
+ * exists, pre-checked, so a player who set their team up once and doesn't
+ * need to make a situational change can confirm immediately. Falls back to
+ * the original first-6-by-jersey-number selection when no lineup has ever
+ * been saved — matching what buildFormation's own default already does.
  */
 export function LineupSelect({ teamId, opponentName, onBack, onConfirm }: Props) {
   const [players, setPlayers] = useState<PlayerDTO[] | null>(null);
@@ -28,10 +31,15 @@ export function LineupSelect({ teamId, opponentName, onBack, onConfirm }: Props)
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchPlayers(teamId)
-      .then((list) => {
+    Promise.all([fetchPlayers(teamId), fetchTeamLineup(teamId)])
+      .then(([list, lineupDto]) => {
         setPlayers(list);
-        setSelected(new Set(list.slice(0, STARTERS_NEEDED).map((p) => p.id)));
+        const savedIds = lineupDto.slots
+          ?.map((s) => s.playerId)
+          .filter((id) => list.some((p) => p.id === id));
+        setSelected(
+          new Set(savedIds && savedIds.length === STARTERS_NEEDED ? savedIds : list.slice(0, STARTERS_NEEDED).map((p) => p.id))
+        );
       })
       .catch((e) => setError(String(e.message ?? e)));
   }, [teamId]);

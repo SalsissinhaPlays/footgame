@@ -88,6 +88,16 @@ export interface MatchCallbacks {
   onPawnPointerDown: (pawnId: string) => void;
   /** Fired once, on a valid drop (see MatchScene's own bounds-check, which owns rejecting an out-of-bounds drop and snapping the sprite back — Game.tsx only ever hears about accepted drops). */
   onPawnDragEnd: (pawnId: string, point: Vec2) => void;
+  /**
+   * Optional — a right-click landing on a pawn's own hit area is otherwise
+   * entirely unhandled by MatchScene (deliberately: a real match needs
+   * right-click to reach the VIEWPORT's own contextmenu handler untouched,
+   * see Game.tsx's handleViewportContextMenu and its "why" comment), so
+   * this only fires for a consumer that explicitly wires it up — the
+   * Formation Editor screen's "right-click benches this player" gesture,
+   * not used by any match mode.
+   */
+  onPawnRightClick?: (pawnId: string) => void;
 }
 
 // How far into the pitch the reach-highlight's "shot zone" tint extends from
@@ -824,6 +834,10 @@ export class MatchScene extends Phaser.Scene {
     // Game.tsx's deselect handler untouched, and a left-click-drag needs to
     // be free to pan the camera instead of reselecting this pawn).
     container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) {
+        this.callbacks?.onPawnRightClick?.(pawn.id);
+        return;
+      }
       if (!pointer.leftButtonDown()) return;
       this.pendingClick = { type: "pawn", id: pawn.id };
       // Team Management sandbox only. Firing this callback synchronously,

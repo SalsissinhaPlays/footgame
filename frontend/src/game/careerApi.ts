@@ -11,6 +11,7 @@ import type {
   TransferDTO,
 } from "./careerTypes";
 import type { TacticalProfile } from "./tacticalProfile";
+import type { LineupSlot } from "./formations";
 
 // Same relative, same-origin path as api.ts (Vite proxies /api to the
 // backend) — see that file's comment on why this must stay relative rather
@@ -284,4 +285,27 @@ export function saveCornerPreset(teamId: number, offsets: CornerOffset[]): Promi
     headers: JSON_HEADERS,
     body: JSON.stringify({ offsets }),
   }).then(json<CornerPresetDTO>);
+}
+
+// --- Base lineup / formation ---
+// slots is stored opaquely on the backend (see db.ts's team_lineups
+// comment) and already matches game/formations.ts's own LineupSlot shape
+// one-to-one, so there's no snake_case/camelCase conversion layer needed
+// here the way TacticalProfile/TeamTacticsDTO has.
+
+export interface TeamLineupDTO {
+  team_id: number;
+  slots: LineupSlot[] | null;
+}
+
+export function fetchTeamLineup(teamId: number): Promise<TeamLineupDTO> {
+  return fetch(`${API_BASE}/teams/${teamId}/lineup`).then(json<TeamLineupDTO>);
+}
+
+export function saveTeamLineup(teamId: number, slots: LineupSlot[]): Promise<TeamLineupDTO> {
+  return fetch(`${API_BASE}/teams/${teamId}/lineup`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ slots }),
+  }).then(json<TeamLineupDTO>);
 }
