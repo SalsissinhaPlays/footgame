@@ -95,6 +95,24 @@ export interface ManagerFiring {
   new_style: string;
 }
 
+/** A human-team player who rolled into retirement this rollover but hasn't been finalized — see careerApi.ts's advanceSeason/finalizeRetirement, and ClubHome's Keep/Let go banner. */
+export interface PendingRetirement {
+  player_id: number;
+  name: string;
+  position: string;
+  age: number;
+  team_id: number;
+}
+
+/** An AI-controlled team's retirement, already resolved (player replaced by a newgen) by the time advance-season returns — purely informational, nothing to act on. */
+export interface ResolvedRetirement {
+  team_id: number;
+  team_name: string;
+  player_name: string;
+  age: number;
+  newgen_name: string;
+}
+
 export interface TopScorerRow {
   player_id: number;
   player_name: string;

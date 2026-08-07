@@ -204,6 +204,12 @@ ensureColumn("players", "jumping", "jumping INTEGER NOT NULL DEFAULT 50");
 ensureColumn("players", "shot_stopping", "shot_stopping INTEGER NOT NULL DEFAULT 50");
 ensureColumn("players", "reflexes", "reflexes INTEGER NOT NULL DEFAULT 50");
 ensureColumn("players", "heading", "heading INTEGER NOT NULL DEFAULT 50");
+// 25 (a plausible "prime") is only ever seen by players that existed before
+// this column did — starterLeague.ts's generator and the newgen generator
+// (see index.ts's advance-season) always supply a real age explicitly, so
+// this default backfill is a one-time migration concern, not part of
+// either generator's own age-picking logic.
+ensureColumn("players", "age", "age INTEGER NOT NULL DEFAULT 25");
 // Nullable, no default: existing teams (today's seeded demo data, and any
 // team created before saves existed) get save_id = NULL, meaning "not part
 // of any save" — that's what keeps the existing unscoped GET /api/teams

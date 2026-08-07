@@ -5,7 +5,9 @@ import type {
   FixtureDTO,
   ManagerDTO,
   ManagerFiring,
+  PendingRetirement,
   PlayerSearchDTO,
+  ResolvedRetirement,
   StandingRow,
   TeamTacticsDTO,
   TopScorerRow,
@@ -108,6 +110,7 @@ export interface PlayerInput {
   name: string;
   position: string;
   jersey_number: number;
+  age?: number;
   pace?: number;
   stamina?: number;
   skill?: number;
@@ -230,10 +233,17 @@ export function simulateRound(leagueId: number, round: number): Promise<FixtureD
  * replaced as part of this rollover, weighted by how they finished — see
  * the backend's fireAndRehireManager.
  */
-export function advanceSeason(saveId: number): Promise<LeagueDTO & { firings: ManagerFiring[] }> {
+export function advanceSeason(
+  saveId: number
+): Promise<LeagueDTO & { firings: ManagerFiring[]; pendingRetirements: PendingRetirement[]; resolvedRetirements: ResolvedRetirement[] }> {
   return fetch(`${API_BASE}/saves/${saveId}/advance-season`, { method: "POST" }).then(
-    json<LeagueDTO & { firings: ManagerFiring[] }>
+    json<LeagueDTO & { firings: ManagerFiring[]; pendingRetirements: PendingRetirement[]; resolvedRetirements: ResolvedRetirement[] }>
   );
+}
+
+/** Finalizes a pending retirement the player chose not to talk out of ("Let go") — see advance-season's own pendingRetirements and ClubHome's banner. Returns the newgen who replaced them. */
+export function finalizeRetirement(playerId: number): Promise<PlayerDTO> {
+  return fetch(`${API_BASE}/players/${playerId}/retire`, { method: "POST" }).then(json<PlayerDTO>);
 }
 
 export function fetchManagers(saveId: number): Promise<ManagerDTO[]> {

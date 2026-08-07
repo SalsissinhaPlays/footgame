@@ -299,6 +299,7 @@ function PlayerDetail({
         name: edit.name,
         position: edit.position,
         jersey_number: edit.jersey_number,
+        age: edit.age,
         pace: edit.pace,
         stamina: edit.stamina,
         skill: edit.skill,
@@ -351,6 +352,10 @@ function PlayerDetail({
             value={edit.jersey_number}
             onChange={(e) => setField("jersey_number", Number(e.target.value))}
           />
+        </label>
+        <label className="career-attr-label">
+          Age
+          <input type="number" min={16} value={edit.age} onChange={(e) => setField("age", Number(e.target.value))} />
         </label>
       </div>
 

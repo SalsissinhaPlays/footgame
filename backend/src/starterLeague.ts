@@ -9,6 +9,7 @@ export interface GeneratedPlayer {
   name: string;
   position: "GK" | "DEF" | "MID" | "FWD";
   jersey_number: number;
+  age: number;
   pace: number;
   stamina: number;
   skill: number;
@@ -88,7 +89,7 @@ function generatePlayerName(usedNames: Set<string>): string {
  * range instead of one fixed value per position, so a generated squad's 4
  * defenders don't all play identically.
  */
-function attributesFor(position: GeneratedPlayer["position"]): Omit<GeneratedPlayer, "name" | "position" | "jersey_number"> {
+function attributesFor(position: GeneratedPlayer["position"]): Omit<GeneratedPlayer, "name" | "position" | "jersey_number" | "age"> {
   switch (position) {
     case "GK":
       return {
@@ -133,16 +134,51 @@ function attributesFor(position: GeneratedPlayer["position"]): Omit<GeneratedPla
   }
 }
 
+// A freshly generated senior-squad player's age spread — wide enough that
+// a brand-new save already has some players nearing retirement and others
+// just breaking through, rather than every player entering the world at
+// the same age and aging out in lockstep years later.
+const STARTER_AGE_RANGE: [number, number] = [18, 34];
+// A newgen replacing a retired player (see index.ts's advance-season and
+// POST /api/players/:id/retire) — young enough that the aging curve has a
+// full career's worth of growth, then decline, still ahead of them.
+const NEWGEN_AGE_RANGE: [number, number] = [17, 20];
+
+function generatePlayer(
+  position: GeneratedPlayer["position"],
+  jerseyNumber: number,
+  usedNames: Set<string>,
+  ageRange: [number, number]
+): GeneratedPlayer {
+  return {
+    name: generatePlayerName(usedNames),
+    position,
+    jersey_number: jerseyNumber,
+    age: randInt(ageRange[0], ageRange[1]),
+    ...attributesFor(position),
+  };
+}
+
 export function generateStarterLeague(): GeneratedTeam[] {
   const teamNames = generateTeamNames(12);
   return teamNames.map((name) => {
     const usedNames = new Set<string>();
-    const players: GeneratedPlayer[] = POSITION_PLAN.map((position, i) => ({
-      name: generatePlayerName(usedNames),
-      position,
-      jersey_number: i + 1,
-      ...attributesFor(position),
-    }));
+    const players: GeneratedPlayer[] = POSITION_PLAN.map((position, i) =>
+      generatePlayer(position, i + 1, usedNames, STARTER_AGE_RANGE)
+    );
     return { name, players };
   });
+}
+
+/**
+ * One replacement player for a retired one — deliberately reuses the exact
+ * same name/attribute generation a fresh save's starter squad already
+ * uses (attributesFor has no separate "potential" curve yet; a newgen is
+ * mechanically just a young version of any other generated player), just
+ * skewed young via NEWGEN_AGE_RANGE. usedNames is a fresh, empty set per
+ * call — a single newgen doesn't need to dodge an entire league's worth of
+ * existing names, only very bad luck would collide.
+ */
+export function generateNewgen(position: GeneratedPlayer["position"], jerseyNumber: number): GeneratedPlayer {
+  return generatePlayer(position, jerseyNumber, new Set(), NEWGEN_AGE_RANGE);
 }

@@ -4,6 +4,8 @@ export interface PlayerDTO {
   name: string;
   position: string;
   jersey_number: number;
+  /** Increments by 1 every Career-mode season rollover — see backend's advance-season aging/retirement pass. Not meaningful for the non-career demo teams (hotseat/AI-quick-play/solo never advance a season). */
+  age: number;
   pace: number;
   stamina: number;
   skill: number;

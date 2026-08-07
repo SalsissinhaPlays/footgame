@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { db } from "./db.js";
 import { generateRoundRobin } from "./fixtures.js";
-import { generateStarterLeague } from "./starterLeague.js";
+import { generateStarterLeague, generateNewgen } from "./starterLeague.js";
 import { computeTeamStrength, simulateScore, type PlayerAttrs } from "./quickSim.js";
 import { generateManager, TACTIC_FIELDS, type TacticFields } from "./managerGenerator.js";
 
@@ -70,8 +70,8 @@ app.post("/api/saves", (req, res) => {
     const starterTeams = generateStarterLeague();
     const insertTeam = db.prepare("INSERT INTO teams (name, save_id) VALUES (?, ?)");
     const insertPlayer = db.prepare(
-      `INSERT INTO players (team_id, name, position, jersey_number, pace, stamina, skill, jumping, shot_stopping, reflexes, heading)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO players (team_id, name, position, jersey_number, age, pace, stamina, skill, jumping, shot_stopping, reflexes, heading)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const teamIds: number[] = [];
     for (const team of starterTeams) {
@@ -83,6 +83,7 @@ app.post("/api/saves", (req, res) => {
           p.name,
           p.position,
           p.jersey_number,
+          p.age,
           p.pace,
           p.stamina,
           p.skill,
@@ -283,6 +284,15 @@ function readAttribute(body: unknown, key: string): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 50;
 }
 
+// 22 (a plausible age for a fresh professional, distinct from the
+// attribute fields' own DEFAULT-50 fallback above) — only ever seen when
+// a caller creates a player without specifying one, e.g. Team Management's
+// "+ Add player" form.
+function readAge(body: unknown): number {
+  const value = (body as Record<string, unknown> | null)?.age;
+  return typeof value === "number" && Number.isFinite(value) ? value : 22;
+}
+
 app.post("/api/teams/:id/players", (req, res) => {
   const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
   if (!team) {
@@ -296,13 +306,14 @@ app.post("/api/teams/:id/players", (req, res) => {
     res.status(400).json({ error: "name, position, and jersey_number are required" });
     return;
   }
+  const age = readAge(req.body);
   const attrs = PLAYER_ATTRIBUTES.map((key) => readAttribute(req.body, key));
   const result = db
     .prepare(
-      `INSERT INTO players (team_id, name, position, jersey_number, pace, stamina, skill, jumping, shot_stopping, reflexes, heading)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO players (team_id, name, position, jersey_number, age, pace, stamina, skill, jumping, shot_stopping, reflexes, heading)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(req.params.id, name, position, jerseyNumber, ...attrs);
+    .run(req.params.id, name, position, jerseyNumber, age, ...attrs);
   res.status(201).json(db.prepare("SELECT * FROM players WHERE id = ?").get(result.lastInsertRowid));
 });
 
@@ -318,13 +329,14 @@ app.patch("/api/players/:id", (req, res) => {
   const position = typeof req.body?.position === "string" ? req.body.position.trim() : String(existing.position);
   const jerseyNumber =
     typeof req.body?.jersey_number === "number" ? req.body.jersey_number : Number(existing.jersey_number);
+  const age = typeof req.body?.age === "number" ? req.body.age : Number(existing.age);
   const attrs = PLAYER_ATTRIBUTES.map((key) =>
     typeof req.body?.[key] === "number" ? req.body[key] : Number(existing[key])
   );
   db.prepare(
-    `UPDATE players SET name = ?, position = ?, jersey_number = ?, pace = ?, stamina = ?, skill = ?, jumping = ?, shot_stopping = ?, reflexes = ?, heading = ?
+    `UPDATE players SET name = ?, position = ?, jersey_number = ?, age = ?, pace = ?, stamina = ?, skill = ?, jumping = ?, shot_stopping = ?, reflexes = ?, heading = ?
      WHERE id = ?`
-  ).run(name, position, jerseyNumber, ...attrs, req.params.id);
+  ).run(name, position, jerseyNumber, age, ...attrs, req.params.id);
   res.json(db.prepare("SELECT * FROM players WHERE id = ?").get(req.params.id));
 });
 
@@ -335,6 +347,54 @@ app.delete("/api/players/:id", (req, res) => {
     return;
   }
   res.status(204).end();
+});
+
+/**
+ * Finalizes a retirement the player chose NOT to talk their way out of —
+ * see advance-season's own comment for why the human's own team's
+ * retiring players are only ever collected as `pendingRetirements` there,
+ * never auto-resolved: this is what the frontend's "Let go" button
+ * actually calls. "Keep" needs no endpoint at all — doing nothing is
+ * already the correct outcome (the player stays exactly as they are,
+ * re-rolled next season at a higher age/chance).
+ */
+app.post("/api/players/:id/retire", (req, res) => {
+  const player = db.prepare("SELECT * FROM players WHERE id = ?").get(req.params.id) as
+    | { id: number; team_id: number; position: "GK" | "DEF" | "MID" | "FWD"; jersey_number: number }
+    | undefined;
+  if (!player) {
+    res.status(404).json({ error: "player not found" });
+    return;
+  }
+  const newgen = generateNewgen(player.position, player.jersey_number);
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM players WHERE id = ?").run(player.id);
+    const result = db
+      .prepare(
+        `INSERT INTO players (team_id, name, position, jersey_number, age, pace, stamina, skill, jumping, shot_stopping, reflexes, heading)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        player.team_id,
+        newgen.name,
+        newgen.position,
+        newgen.jersey_number,
+        newgen.age,
+        newgen.pace,
+        newgen.stamina,
+        newgen.skill,
+        newgen.jumping,
+        newgen.shot_stopping,
+        newgen.reflexes,
+        newgen.heading
+      );
+    db.exec("COMMIT");
+    res.status(201).json(db.prepare("SELECT * FROM players WHERE id = ?").get(result.lastInsertRowid));
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 });
 
 // --- Transfers ---
@@ -659,6 +719,19 @@ app.post("/api/leagues/:id/simulate-round", (req, res) => {
   );
 });
 
+// --- Aging / retirement tuning ---
+// Attributes grow toward this age, then decline past it — one shared curve
+// for all 7 attributes, see advance-season's own comment for why.
+const AGING_PEAK_AGE = 27;
+const AGING_GROWTH_PER_SEASON = 2;
+const AGING_DECLINE_PER_SEASON = 2;
+// Retirement chance is 0 below this age, climbing linearly to
+// RETIREMENT_MAX_CHANCE by RETIREMENT_MAX_AGE, then holding flat — never a
+// hard cutoff, so a player can always beat the odds and play on.
+const RETIREMENT_MIN_AGE = 33;
+const RETIREMENT_MAX_AGE = 40;
+const RETIREMENT_MAX_CHANCE = 0.6;
+
 /**
  * Once every fixture in a save's current (highest-season) league has a
  * recorded score, this creates the next season: a new league row for the
@@ -669,7 +742,7 @@ app.post("/api/leagues/:id/simulate-round", (req, res) => {
  */
 app.post("/api/saves/:id/advance-season", (req, res) => {
   const save = db.prepare("SELECT * FROM saves WHERE id = ?").get(req.params.id) as
-    | { id: number; season: number }
+    | { id: number; season: number; user_team_id: number | null }
     | undefined;
   if (!save) {
     res.status(404).json({ error: "save not found" });
@@ -704,6 +777,14 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
   const nextSeason = currentLeague.season + 1;
   let newLeagueId: number;
   const firings: { team_id: number; team_name: string; old_manager_name: string; new_manager_name: string; new_style: string }[] = [];
+  const pendingRetirements: { player_id: number; name: string; position: string; age: number; team_id: number }[] = [];
+  const resolvedRetirements: {
+    team_id: number;
+    team_name: string;
+    player_name: string;
+    age: number;
+    newgen_name: string;
+  }[] = [];
   db.exec("BEGIN");
   try {
     // Autonomous manager firing, weighted by how the just-finished season
@@ -723,6 +804,115 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
       if (Math.random() >= fireChance) continue;
       const result = fireAndRehireManager(row.team_id, Number(req.params.id));
       if (result) firings.push({ team_id: row.team_id, team_name: row.team_name, ...result });
+    }
+
+    // Aging, attribute progression, and retirement — every player in the
+    // save, not just the finished league's (there's only ever one league
+    // per save at a time in practice, but this is save-scoped like the
+    // rest of this endpoint rather than league-scoped). One shared
+    // growth/decline curve for all 7 attributes (peak around
+    // AGING_PEAK_AGE) rather than per-attribute curves — deliberately
+    // simple until real playtesting says otherwise, the same "no balance
+    // pass without playtesting" reasoning this project already applies
+    // elsewhere (see quickSim.ts's own comment). A player past
+    // RETIREMENT_MIN_AGE rolls a retirement chance that climbs toward
+    // RETIREMENT_MAX_AGE. An AI-controlled team's retiring player is
+    // resolved immediately right here (retire + newgen) — there's no
+    // human to ask, matching how every other AI-side season-rollover
+    // decision in this codebase already works (manager firing above, the
+    // quick-vs-extended restart choice at match time, etc.). The human's
+    // own team's retiring players are NOT resolved here: they're collected
+    // into pendingRetirements and returned in the response instead, so the
+    // player gets a real "ask them to stay" choice — POST
+    // /api/players/:id/retire is what "let go" actually calls; "keep"
+    // needs no call at all, the player simply isn't touched and gets
+    // re-rolled (a year older, so a higher chance) next season.
+    const allPlayers = db
+      .prepare(
+        `SELECT players.* FROM players JOIN teams ON teams.id = players.team_id WHERE teams.save_id = ?`
+      )
+      .all(req.params.id) as {
+      id: number;
+      team_id: number;
+      name: string;
+      position: "GK" | "DEF" | "MID" | "FWD";
+      jersey_number: number;
+      age: number;
+      pace: number;
+      stamina: number;
+      skill: number;
+      jumping: number;
+      shot_stopping: number;
+      reflexes: number;
+      heading: number;
+    }[];
+    const teamNameById = new Map(
+      (db.prepare("SELECT id, name FROM teams WHERE save_id = ?").all(req.params.id) as { id: number; name: string }[]).map(
+        (t) => [t.id, t.name]
+      )
+    );
+    const updateAging = db.prepare(
+      `UPDATE players SET age = ?, pace = ?, stamina = ?, skill = ?, jumping = ?, shot_stopping = ?, reflexes = ?, heading = ?
+       WHERE id = ?`
+    );
+    const deletePlayerRow = db.prepare("DELETE FROM players WHERE id = ?");
+    const insertNewgenRow = db.prepare(
+      `INSERT INTO players (team_id, name, position, jersey_number, age, pace, stamina, skill, jumping, shot_stopping, reflexes, heading)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const ageAttribute = (value: number, newAge: number) => {
+      const delta = newAge <= AGING_PEAK_AGE ? AGING_GROWTH_PER_SEASON : -AGING_DECLINE_PER_SEASON;
+      return Math.max(0, Math.min(99, value + delta));
+    };
+    const retirementChance = (age: number) => {
+      if (age < RETIREMENT_MIN_AGE) return 0;
+      const frac = Math.min(1, (age - RETIREMENT_MIN_AGE) / (RETIREMENT_MAX_AGE - RETIREMENT_MIN_AGE));
+      return frac * RETIREMENT_MAX_CHANCE;
+    };
+
+    for (const p of allPlayers) {
+      const newAge = p.age + 1;
+      updateAging.run(
+        newAge,
+        ageAttribute(p.pace, newAge),
+        ageAttribute(p.stamina, newAge),
+        ageAttribute(p.skill, newAge),
+        ageAttribute(p.jumping, newAge),
+        ageAttribute(p.shot_stopping, newAge),
+        ageAttribute(p.reflexes, newAge),
+        ageAttribute(p.heading, newAge),
+        p.id
+      );
+
+      if (Math.random() >= retirementChance(newAge)) continue;
+
+      if (p.team_id === save.user_team_id) {
+        pendingRetirements.push({ player_id: p.id, name: p.name, position: p.position, age: newAge, team_id: p.team_id });
+      } else {
+        const newgen = generateNewgen(p.position, p.jersey_number);
+        deletePlayerRow.run(p.id);
+        insertNewgenRow.run(
+          p.team_id,
+          newgen.name,
+          newgen.position,
+          newgen.jersey_number,
+          newgen.age,
+          newgen.pace,
+          newgen.stamina,
+          newgen.skill,
+          newgen.jumping,
+          newgen.shot_stopping,
+          newgen.reflexes,
+          newgen.heading
+        );
+        resolvedRetirements.push({
+          team_id: p.team_id,
+          team_name: teamNameById.get(p.team_id) ?? `#${p.team_id}`,
+          player_name: p.name,
+          age: newAge,
+          newgen_name: newgen.name,
+        });
+      }
     }
 
     newLeagueId = Number(
@@ -747,7 +937,7 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
   }
 
   const newLeague = db.prepare("SELECT * FROM leagues WHERE id = ?").get(newLeagueId);
-  res.status(201).json({ ...(newLeague as object), firings });
+  res.status(201).json({ ...(newLeague as object), firings, pendingRetirements, resolvedRetirements });
 });
 
 // --- Standings ---

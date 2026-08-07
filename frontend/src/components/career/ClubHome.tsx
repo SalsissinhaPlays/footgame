@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
-import { advanceSeason, fetchFixtures, fetchSave, fetchSaveLeagues, fetchSaveTeams } from "../../game/careerApi";
-import type { FixtureDTO, LeagueDTO, ManagerFiring, SaveDTO } from "../../game/careerTypes";
+import {
+  advanceSeason,
+  fetchFixtures,
+  fetchSave,
+  fetchSaveLeagues,
+  fetchSaveTeams,
+  finalizeRetirement,
+} from "../../game/careerApi";
+import type { FixtureDTO, LeagueDTO, ManagerFiring, PendingRetirement, ResolvedRetirement, SaveDTO } from "../../game/careerTypes";
 import type { TeamDTO } from "../../game/types";
 import "./career.css";
 
@@ -50,6 +57,14 @@ export function ClubHome({
   const [error, setError] = useState<string | null>(null);
   const [advancing, setAdvancing] = useState(false);
   const [lastFirings, setLastFirings] = useState<ManagerFiring[]>([]);
+  // The human's own team's retiring players, awaiting a real Keep/Let go
+  // choice — see advance-season's own comment for why these are never
+  // auto-resolved the way an AI team's retirements already are.
+  // resolvedRetirements is purely informational (AI teams, already
+  // finalized by the time this response arrives).
+  const [pendingRetirements, setPendingRetirements] = useState<PendingRetirement[]>([]);
+  const [resolvedRetirements, setResolvedRetirements] = useState<ResolvedRetirement[]>([]);
+  const [retirementBusy, setRetirementBusy] = useState<number | null>(null);
 
   function reload() {
     fetchSave(saveId)
@@ -96,11 +111,34 @@ export function ClubHome({
     try {
       const result = await advanceSeason(saveId);
       setLastFirings(result.firings);
+      setPendingRetirements(result.pendingRetirements);
+      setResolvedRetirements(result.resolvedRetirements);
       reload();
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {
       setAdvancing(false);
+    }
+  }
+
+  // "Keep" needs no backend call at all — the player was never touched by
+  // advance-season in the first place (see its own comment), so removing
+  // them from this list is the entire effect. They'll be re-rolled next
+  // season, a year older.
+  function handleKeep(playerId: number) {
+    setPendingRetirements((prev) => prev.filter((p) => p.player_id !== playerId));
+  }
+
+  async function handleLetGo(playerId: number) {
+    setError(null);
+    setRetirementBusy(playerId);
+    try {
+      await finalizeRetirement(playerId);
+      setPendingRetirements((prev) => prev.filter((p) => p.player_id !== playerId));
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setRetirementBusy(null);
     }
   }
 
@@ -129,6 +167,60 @@ export function ClubHome({
                   {f.old_manager_name} out, {f.new_manager_name} in
                 </span>
                 <span className="career-manager-style">{f.new_style}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {pendingRetirements.length > 0 && (
+        <div className="career-section career-firings-banner">
+          <h2>Considering retirement</h2>
+          <p className="career-muted">
+            Ask them to stay for one more year, or let them go — either way, a new young player takes the spot if
+            they leave.
+          </p>
+          <ul className="career-list">
+            {pendingRetirements.map((p) => (
+              <li key={p.player_id} className="career-manager-row">
+                <span className="career-manager-team">{p.name}</span>
+                <span className="career-manager-name">
+                  {p.position}, age {p.age}
+                </span>
+                <span className="career-retirement-actions">
+                  <button
+                    type="button"
+                    className="career-btn-small career-btn-primary"
+                    disabled={retirementBusy === p.player_id}
+                    onClick={() => handleKeep(p.player_id)}
+                  >
+                    Ask to stay
+                  </button>
+                  <button
+                    type="button"
+                    className="career-btn-small"
+                    disabled={retirementBusy === p.player_id}
+                    onClick={() => handleLetGo(p.player_id)}
+                  >
+                    {retirementBusy === p.player_id ? "Retiring…" : "Let go"}
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {resolvedRetirements.length > 0 && (
+        <div className="career-section">
+          <h2>Retirements around the league</h2>
+          <ul className="career-list">
+            {resolvedRetirements.map((r, i) => (
+              <li key={i} className="career-manager-row">
+                <span className="career-manager-team">{r.team_name}</span>
+                <span className="career-manager-name">
+                  {r.player_name} (age {r.age}) retired — {r.newgen_name} signed as a replacement
+                </span>
               </li>
             ))}
           </ul>

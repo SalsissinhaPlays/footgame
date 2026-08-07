@@ -234,7 +234,7 @@ export function Search({ saveId, onBack }: Props) {
                   #{selectedPlayer.jersey_number} {selectedPlayer.name}
                 </h2>
                 <p className="career-muted">
-                  {selectedPlayer.position} — {selectedPlayer.team_name}
+                  {selectedPlayer.position}, age {selectedPlayer.age} — {selectedPlayer.team_name}
                 </p>
                 <div className="career-player-detail-attrs">
                   {ATTR_LABELS.map(({ key, label }) => (

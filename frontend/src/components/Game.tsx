@@ -796,6 +796,7 @@ export function Game({
         name: "New Player",
         position: "MID",
         jersey_number: maxJersey + 1,
+        age: 22,
         pace: 50,
         stamina: 50,
         skill: 50,
