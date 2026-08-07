@@ -5,6 +5,7 @@ import type {
   FixtureDTO,
   ManagerDTO,
   ManagerFiring,
+  PlayerSearchDTO,
   StandingRow,
   TeamTacticsDTO,
   TopScorerRow,
@@ -72,6 +73,11 @@ export function deleteSave(id: number): Promise<void> {
 
 export function fetchSaveTeams(saveId: number): Promise<TeamDTO[]> {
   return fetch(`${API_BASE}/saves/${saveId}/teams`).then(json<TeamDTO[]>);
+}
+
+/** Every player across every team in the save, in one request — see the Search screen, the only consumer that needs "all players" rather than one team's roster. */
+export function fetchSavePlayers(saveId: number): Promise<PlayerSearchDTO[]> {
+  return fetch(`${API_BASE}/saves/${saveId}/players`).then(json<PlayerSearchDTO[]>);
 }
 
 export function createTeam(saveId: number, name: string): Promise<TeamDTO> {

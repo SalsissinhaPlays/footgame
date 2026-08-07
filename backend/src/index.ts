@@ -205,6 +205,24 @@ app.get("/api/saves/:id/teams", (req, res) => {
   res.json(teams);
 });
 
+// Every player across every team in the save, each row carrying its own
+// team_name/team_id — the Search screen's own single fetch (see
+// Search.tsx), rather than N per-team fetchPlayers calls. Nothing else
+// today needs "all players in a save" at once, so this stays a dedicated
+// endpoint rather than a fetchPlayers(teamId) generalization.
+app.get("/api/saves/:id/players", (req, res) => {
+  const players = db
+    .prepare(
+      `SELECT players.*, teams.name AS team_name, teams.id AS team_id
+       FROM players
+       JOIN teams ON teams.id = players.team_id
+       WHERE teams.save_id = ?
+       ORDER BY teams.name, players.jersey_number`
+    )
+    .all(req.params.id);
+  res.json(players);
+});
+
 app.post("/api/saves/:id/teams", (req, res) => {
   const save = db.prepare("SELECT id FROM saves WHERE id = ?").get(req.params.id);
   if (!save) {

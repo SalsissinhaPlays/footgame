@@ -727,3 +727,19 @@
   align-items: center;
   gap: 12px;
 }
+
+/* --- Search (managers/teams/players) --- */
+
+.career-search-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 15px;
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.career-search-results {
+  max-height: 70vh;
+}

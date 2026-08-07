@@ -3,6 +3,8 @@
 // types.ts's PlayerDTO/TeamDTO already established, just split into their
 // own file since this is a distinct, larger group of shapes.
 
+import type { PlayerDTO } from "./types";
+
 export interface SaveDTO {
   id: number;
   name: string;
@@ -99,6 +101,11 @@ export interface TopScorerRow {
   team_id: number;
   team_name: string;
   goals: number;
+}
+
+/** A PlayerDTO row plus the owning team's name — see careerApi.ts's fetchSavePlayers, which is the Search screen's own single-fetch alternative to N per-team fetchPlayers calls. */
+export interface PlayerSearchDTO extends PlayerDTO {
+  team_name: string;
 }
 
 export interface TransferDTO {

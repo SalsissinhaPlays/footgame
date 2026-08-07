@@ -12,7 +12,7 @@ import { ClubHome } from "./ClubHome";
 import { TeamManagement } from "./TeamManagement";
 import { Calendar } from "./Calendar";
 import { LineupSelect } from "./LineupSelect";
-import { Managers } from "./Managers";
+import { Search } from "./Search";
 
 /**
  * Owns navigation between the career screens as a small explicit stack —
@@ -38,7 +38,7 @@ type CareerScreen =
   | { name: "teamPreview"; save: SaveDTO; team: TeamDTO }
   | { name: "clubHome"; saveId: number }
   | { name: "teamManagement"; saveId: number; teamId: number }
-  | { name: "managers"; saveId: number }
+  | { name: "search"; saveId: number }
   | { name: "calendar"; saveId: number; leagueId: number }
   | { name: "lineup"; saveId: number; leagueId: number; fixture: FixtureDTO; userTeamId: number; opponentName: string }
   | {
@@ -117,7 +117,7 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
           saveId={screen.saveId}
           onOpenCalendar={(leagueId) => setScreen({ name: "calendar", saveId: screen.saveId, leagueId })}
           onOpenTeamManagement={(teamId) => setScreen({ name: "teamManagement", saveId: screen.saveId, teamId })}
-          onOpenManagers={() => setScreen({ name: "managers", saveId: screen.saveId })}
+          onOpenSearch={() => setScreen({ name: "search", saveId: screen.saveId })}
           onPlayFixture={(fixture, leagueId, userTeamId, opponentName) =>
             setScreen({ name: "lineup", saveId: screen.saveId, leagueId, fixture, userTeamId, opponentName })
           }
@@ -133,10 +133,8 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
           onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })}
         />
       );
-    case "managers":
-      return (
-        <Managers saveId={screen.saveId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />
-      );
+    case "search":
+      return <Search saveId={screen.saveId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />;
     case "calendar":
       return <Calendar leagueId={screen.leagueId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />;
     case "lineup":
