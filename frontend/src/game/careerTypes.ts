@@ -113,6 +113,18 @@ export interface ResolvedRetirement {
   newgen_name: string;
 }
 
+/** One row of the News screen's feed — see db.ts's news_items comment for why `message` is a plain pre-rendered headline rather than structured per-type fields. `team_name` is nullable (LEFT JOIN) since not every type is guaranteed to center on one club. */
+export interface NewsItemDTO {
+  id: number;
+  save_id: number;
+  season: number;
+  type: string;
+  team_id: number | null;
+  team_name: string | null;
+  message: string;
+  created_at: string;
+}
+
 export interface TopScorerRow {
   player_id: number;
   player_name: string;

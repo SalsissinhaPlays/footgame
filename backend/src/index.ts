@@ -224,6 +224,24 @@ app.get("/api/saves/:id/players", (req, res) => {
   res.json(players);
 });
 
+// The News screen's whole feed, most recent first — see db.ts's
+// news_items comment and insertNewsItem above for how rows get here.
+// team_name is nullable (LEFT JOIN) since not every news item will
+// necessarily center on one specific club forever, even though every type
+// built so far does.
+app.get("/api/saves/:id/news", (req, res) => {
+  const items = db
+    .prepare(
+      `SELECT news_items.*, teams.name AS team_name
+       FROM news_items
+       LEFT JOIN teams ON teams.id = news_items.team_id
+       WHERE news_items.save_id = ?
+       ORDER BY news_items.season DESC, news_items.id DESC`
+    )
+    .all(req.params.id);
+  res.json(items);
+});
+
 app.post("/api/saves/:id/teams", (req, res) => {
   const save = db.prepare("SELECT id FROM saves WHERE id = ?").get(req.params.id);
   if (!save) {
@@ -293,6 +311,21 @@ function readAge(body: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 22;
 }
 
+// The News screen's only source of data — see db.ts's news_items comment
+// for why a pre-rendered message beats structured per-type fields here.
+// Called from inside whatever transaction produced the event (advance-
+// season for firings/AI retirements, POST /api/players/:id/retire for a
+// human "let go"), so a news item can never exist without its event.
+function insertNewsItem(saveId: number, season: number, type: string, teamId: number | null, message: string) {
+  db.prepare("INSERT INTO news_items (save_id, season, type, team_id, message) VALUES (?, ?, ?, ?, ?)").run(
+    saveId,
+    season,
+    type,
+    teamId,
+    message
+  );
+}
+
 app.post("/api/teams/:id/players", (req, res) => {
   const team = db.prepare("SELECT id FROM teams WHERE id = ?").get(req.params.id);
   if (!team) {
@@ -360,12 +393,17 @@ app.delete("/api/players/:id", (req, res) => {
  */
 app.post("/api/players/:id/retire", (req, res) => {
   const player = db.prepare("SELECT * FROM players WHERE id = ?").get(req.params.id) as
-    | { id: number; team_id: number; position: "GK" | "DEF" | "MID" | "FWD"; jersey_number: number }
+    | { id: number; team_id: number; name: string; age: number; position: "GK" | "DEF" | "MID" | "FWD"; jersey_number: number }
     | undefined;
   if (!player) {
     res.status(404).json({ error: "player not found" });
     return;
   }
+  const team = db.prepare("SELECT name, save_id FROM teams WHERE id = ?").get(player.team_id) as
+    | { name: string; save_id: number | null }
+    | undefined;
+  const save =
+    team?.save_id != null ? (db.prepare("SELECT season FROM saves WHERE id = ?").get(team.save_id) as { season: number } | undefined) : undefined;
   const newgen = generateNewgen(player.position, player.jersey_number);
   db.exec("BEGIN");
   try {
@@ -389,6 +427,19 @@ app.post("/api/players/:id/retire", (req, res) => {
         newgen.reflexes,
         newgen.heading
       );
+    // Only a career save's own team has a save_id/season to attribute this
+    // to — the Team Management sandbox's own throwaway players (outside
+    // any save) never reach this endpoint in practice, but there's no
+    // reason to hard-fail if they did.
+    if (team?.save_id != null && save) {
+      insertNewsItem(
+        team.save_id,
+        save.season,
+        "retirement",
+        player.team_id,
+        `${player.name} (age ${player.age}) retired from ${team.name} — ${newgen.name} signed as a replacement`
+      );
+    }
     db.exec("COMMIT");
     res.status(201).json(db.prepare("SELECT * FROM players WHERE id = ?").get(result.lastInsertRowid));
   } catch (err) {
@@ -803,7 +854,16 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
       const fireChance = fracFromBottom <= 0.25 ? 0.5 : fracFromBottom <= 0.6 ? 0.2 : 0.05;
       if (Math.random() >= fireChance) continue;
       const result = fireAndRehireManager(row.team_id, Number(req.params.id));
-      if (result) firings.push({ team_id: row.team_id, team_name: row.team_name, ...result });
+      if (result) {
+        firings.push({ team_id: row.team_id, team_name: row.team_name, ...result });
+        insertNewsItem(
+          Number(req.params.id),
+          nextSeason,
+          "manager",
+          row.team_id,
+          `${row.team_name}: ${result.old_manager_name} out, ${result.new_manager_name} in (${result.new_style})`
+        );
+      }
     }
 
     // Aging, attribute progression, and retirement — every player in the
@@ -905,13 +965,21 @@ app.post("/api/saves/:id/advance-season", (req, res) => {
           newgen.reflexes,
           newgen.heading
         );
+        const teamName = teamNameById.get(p.team_id) ?? `#${p.team_id}`;
         resolvedRetirements.push({
           team_id: p.team_id,
-          team_name: teamNameById.get(p.team_id) ?? `#${p.team_id}`,
+          team_name: teamName,
           player_name: p.name,
           age: newAge,
           newgen_name: newgen.name,
         });
+        insertNewsItem(
+          Number(req.params.id),
+          nextSeason,
+          "retirement",
+          p.team_id,
+          `${p.name} (age ${newAge}) retired from ${teamName} — ${newgen.name} signed as a replacement`
+        );
       }
     }
 

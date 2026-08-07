@@ -5,6 +5,7 @@ import type {
   FixtureDTO,
   ManagerDTO,
   ManagerFiring,
+  NewsItemDTO,
   PendingRetirement,
   PlayerSearchDTO,
   ResolvedRetirement,
@@ -80,6 +81,11 @@ export function fetchSaveTeams(saveId: number): Promise<TeamDTO[]> {
 /** Every player across every team in the save, in one request — see the Search screen, the only consumer that needs "all players" rather than one team's roster. */
 export function fetchSavePlayers(saveId: number): Promise<PlayerSearchDTO[]> {
   return fetch(`${API_BASE}/saves/${saveId}/players`).then(json<PlayerSearchDTO[]>);
+}
+
+/** The News screen's whole feed, most recent season first — see db.ts's news_items comment for how rows get created (manager firings, retirements). */
+export function fetchNews(saveId: number): Promise<NewsItemDTO[]> {
+  return fetch(`${API_BASE}/saves/${saveId}/news`).then(json<NewsItemDTO[]>);
 }
 
 export function createTeam(saveId: number, name: string): Promise<TeamDTO> {

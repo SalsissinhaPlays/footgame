@@ -12,6 +12,7 @@ import { ClubHome } from "./ClubHome";
 import { TeamManagement } from "./TeamManagement";
 import { Calendar } from "./Calendar";
 import { LineupSelect } from "./LineupSelect";
+import { News } from "./News";
 import { Search } from "./Search";
 
 /**
@@ -39,6 +40,7 @@ type CareerScreen =
   | { name: "clubHome"; saveId: number }
   | { name: "teamManagement"; saveId: number; teamId: number }
   | { name: "search"; saveId: number }
+  | { name: "news"; saveId: number }
   | { name: "calendar"; saveId: number; leagueId: number }
   | { name: "lineup"; saveId: number; leagueId: number; fixture: FixtureDTO; userTeamId: number; opponentName: string }
   | {
@@ -118,6 +120,7 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
           onOpenCalendar={(leagueId) => setScreen({ name: "calendar", saveId: screen.saveId, leagueId })}
           onOpenTeamManagement={(teamId) => setScreen({ name: "teamManagement", saveId: screen.saveId, teamId })}
           onOpenSearch={() => setScreen({ name: "search", saveId: screen.saveId })}
+          onOpenNews={() => setScreen({ name: "news", saveId: screen.saveId })}
           onPlayFixture={(fixture, leagueId, userTeamId, opponentName) =>
             setScreen({ name: "lineup", saveId: screen.saveId, leagueId, fixture, userTeamId, opponentName })
           }
@@ -135,6 +138,8 @@ export function Career({ onExitToMenu, isFullscreen, onToggleFullscreen }: Props
       );
     case "search":
       return <Search saveId={screen.saveId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />;
+    case "news":
+      return <News saveId={screen.saveId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />;
     case "calendar":
       return <Calendar leagueId={screen.leagueId} onBack={() => setScreen({ name: "clubHome", saveId: screen.saveId })} />;
     case "lineup":

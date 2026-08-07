@@ -187,6 +187,27 @@ db.exec(`
     sprint_aggressiveness REAL NOT NULL DEFAULT 0.5,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- One row per notable season-rollover event (a manager sacked, a player
+  -- retiring) — the News screen's own feed. message is a plain,
+  -- pre-rendered headline string rather than structured per-type fields:
+  -- there's only ever one consumer (the News screen, rendering a flat
+  -- list), so there's nothing to gain from re-deriving the sentence on
+  -- every read the way an opaque-JSON table (team_lineups, etc.) would.
+  -- team_id is nullable — not every future news type will center on one
+  -- specific club. Written inside the same transaction as whatever
+  -- produced it (advance-season for firings/AI retirements, POST
+  -- /api/players/:id/retire for a human "let go") so a news item can never
+  -- exist without the event it describes actually having happened.
+  CREATE TABLE IF NOT EXISTS news_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    save_id INTEGER NOT NULL REFERENCES saves(id) ON DELETE CASCADE,
+    season INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    team_id INTEGER REFERENCES teams(id),
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // CREATE TABLE IF NOT EXISTS is a no-op against a DB that already exists on
