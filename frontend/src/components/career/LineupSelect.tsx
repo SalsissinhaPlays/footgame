@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { fetchPlayers } from "../../game/api";
 import { fetchTeamLineup } from "../../game/careerApi";
+import { FORMATION_7V7_DEFAULT } from "../../game/formations";
 import type { PlayerDTO } from "../../game/types";
 import "./career.css";
 
-const STARTERS_NEEDED = 6;
+// Derived from the actual default formation's slot count, not a separate
+// hardcoded number, so a future squad-size change (see formations.ts) only
+// needs touching there.
+const STARTERS_NEEDED = FORMATION_7V7_DEFAULT.slots.length;
 
 interface Props {
   teamId: number;
@@ -17,13 +21,14 @@ interface Props {
  * The real prerequisite for substitutions to mean anything: before this,
  * "who starts" was never a choice at all — buildFormation's assignSlots
  * just walked the roster in whatever order the backend returned it
- * (jersey_number), so which 6 of a 12-player career squad actually took
- * the pitch was an accident of jersey numbering. Defaults to the team's
- * saved base lineup (see Team Management's Formation page) when one
- * exists, pre-checked, so a player who set their team up once and doesn't
- * need to make a situational change can confirm immediately. Falls back to
- * the original first-6-by-jersey-number selection when no lineup has ever
- * been saved — matching what buildFormation's own default already does.
+ * (jersey_number), so which STARTERS_NEEDED of a 12-player career squad
+ * actually took the pitch was an accident of jersey numbering. Defaults to
+ * the team's saved base lineup (see Team Management's Formation page) when
+ * one exists, pre-checked, so a player who set their team up once and
+ * doesn't need to make a situational change can confirm immediately. Falls
+ * back to the original first-N-by-jersey-number selection when no lineup
+ * has ever been saved — matching what buildFormation's own default already
+ * does.
  */
 export function LineupSelect({ teamId, opponentName, onBack, onConfirm }: Props) {
   const [players, setPlayers] = useState<PlayerDTO[] | null>(null);

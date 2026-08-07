@@ -43,9 +43,9 @@ export const LAST_NAMES = [
   "Traore", "Larsson", "Berg", "Novak", "Petrov", "Volkov", "Demir", "Aksoy",
 ];
 
-// 12 players: 2 GK, 4 DEF, 4 MID, 2 FWD — real depth beyond the 6 that
-// actually take the pitch, deliberately so a future "pick your starting 6"
-// step has something to choose FROM.
+// 12 players: 2 GK, 4 DEF, 4 MID, 2 FWD — real depth beyond the 7 that
+// actually take the pitch (see frontend's formations.ts), so LineupSelect's
+// "pick your starting lineup" step has something to choose FROM.
 const POSITION_PLAN: GeneratedPlayer["position"][] = [
   "GK", "GK", "DEF", "DEF", "DEF", "DEF", "MID", "MID", "MID", "MID", "FWD", "FWD",
 ];

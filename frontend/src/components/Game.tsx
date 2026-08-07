@@ -405,7 +405,7 @@ export function Game({
   const [pickingMarkTarget, setPickingMarkTarget] = useState(false);
   const [handoff, setHandoff] = useState(false);
   const [loading, setLoading] = useState(true);
-  // Career mode only: whoever LineupSelect left out of the starting 6 —
+  // Career mode only: whoever LineupSelect left out of the starting lineup —
   // populated once in the load effect below, then only ever moves between
   // this list and match.pawns via handleSubstitute. Empty (and the whole
   // Bench UI hidden) for every other mode, since only a career match with
@@ -454,8 +454,8 @@ export function Game({
       // Only fetched in career mode (a lineup choice implies one) — the
       // human's own saved base formation (see Team Management's Formation
       // page), used to seed on-pitch positions instead of the generic
-      // FORMATION_6V6_DEFAULT shape whenever one exists and actually covers
-      // the confirmed starting 6 (buildFormationFromLineup itself falls
+      // FORMATION_7V7_DEFAULT shape whenever one exists and actually covers
+      // the confirmed starting lineup (buildFormationFromLineup itself falls
       // back cleanly otherwise — see that function's own doc comment).
       const savedLineupSlots = hasLineupChoice
         ? await fetchTeamLineup(humanSide === "home" ? home.id : away.id)
@@ -476,7 +476,7 @@ export function Game({
       // symmetric, neutral kickoff), so without this every opening kickoff
       // would just be an unclaimed scramble every pawn is equally far from.
       // The coin-toss winner's central forward (the formation's last slot —
-      // FWD in FORMATION_6V6_DEFAULT) is teleported exactly onto the ball,
+      // FWD in FORMATION_7V7_DEFAULT) is teleported exactly onto the ball,
       // matching how a real kickoff always starts in someone's possession.
       // Deliberately scoped to this one initial load only — post-goal
       // restarts (kickoffFormation, below) are untouched and stay a neutral

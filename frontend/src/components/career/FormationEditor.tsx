@@ -113,12 +113,11 @@ export function FormationEditor({ teamId, players, slots, onReposition, onVacate
     if (!sceneReady) return;
     sceneRef.current?.syncState({
       pawns,
-      // Parked at the same point the camera is focused on (not the true
-      // pitch-center BALL_START, which sits well outside this screen's
-      // zoomed-in, formation-area view) — there's no kickoff here, just
-      // somewhere unobtrusive for MatchScene's required ball sprite to sit.
+      // Unused — showBall below hides the sprite/shadow entirely (there's
+      // no kickoff here), so this position never actually renders anywhere.
       ball: { pos: { x: FIXED_CAMERA.focusX, y: FIXED_CAMERA.focusY } },
       ballHeight: 0,
+      showBall: false,
       selectedId: null,
       reachRadius: null,
       kickMode: false,

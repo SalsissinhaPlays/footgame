@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchPlayers } from "../../game/api";
 import { createPlayer, deletePlayer, fetchSaveTeams, fetchTeamLineup, transferPlayer, updatePlayer } from "../../game/careerApi";
-import { FORMATION_6V6_DEFAULT } from "../../game/formations";
+import { FORMATION_7V7_DEFAULT } from "../../game/formations";
 import type { PlayerDTO, TeamDTO } from "../../game/types";
 import { FormationEditor } from "./FormationEditor";
 import type { EditorSlot } from "./FormationEditor";
@@ -91,7 +91,7 @@ export function TeamManagement({ saveId, teamId, onBack }: Props) {
             // team starts from a sensible shape instead of an empty pitch.
             const remaining = [...roster];
             setSlots(
-              FORMATION_6V6_DEFAULT.slots.map((slot) => {
+              FORMATION_7V7_DEFAULT.slots.map((slot) => {
                 const matchIndex = remaining.findIndex((p) => p.position === slot.position);
                 const index = matchIndex !== -1 ? matchIndex : 0;
                 const [player] = remaining.length > 0 ? remaining.splice(index, 1) : [undefined];

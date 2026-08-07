@@ -1,5 +1,5 @@
 import { GRID_COLS } from "./constants";
-import { FORMATION_6V6_DEFAULT } from "./formations";
+import { FORMATION_7V7_DEFAULT } from "./formations";
 import type { Formation, FormationSlot, LineupSlot } from "./formations";
 import type { Pawn, PlayerDTO, Side, Vec2 } from "./types";
 
@@ -51,7 +51,7 @@ function toPawns(assigned: { player: PlayerDTO; pos: Vec2 }[], side: Side): Pawn
   });
 }
 
-export function buildFormation(players: PlayerDTO[], side: Side, formation: Formation = FORMATION_6V6_DEFAULT): Pawn[] {
+export function buildFormation(players: PlayerDTO[], side: Side, formation: Formation = FORMATION_7V7_DEFAULT): Pawn[] {
   return toPawns(assignSlots(players, formation), side);
 }
 
@@ -60,8 +60,8 @@ export function buildFormation(players: PlayerDTO[], side: Side, formation: Form
  * Team Management Formation screen / backend's team_lineups table) instead
  * of a generic position-shaped Formation — each saved slot is pinned to a
  * SPECIFIC player, not just a position category. `startingPlayerIds` is
- * LineupSelect's confirmed starting 6 for this match, which may differ from
- * the saved lineup (the player swapped a tired starter out) — a saved
+ * LineupSelect's confirmed starting lineup for this match, which may differ
+ * from the saved lineup (the player swapped a tired starter out) — a saved
  * slot whose player isn't in `startingPlayerIds` is "vacated," and whichever
  * confirmed starter isn't covered by an unvacated saved slot ("newcomers")
  * fills those vacated slots via the same position-matching `assignSlots`
@@ -83,7 +83,19 @@ export function buildFormationFromLineup(
   savedSlots: LineupSlot[] | null
 ): Pawn[] {
   if (!savedSlots || savedSlots.length !== startingPlayerIds.length) {
-    return buildFormation(players, side);
+    // `players` is the FULL roster (buildFormationFromLineup needs it to
+    // look up any id from savedSlots or startingPlayerIds), not already
+    // filtered down to the confirmed starters the way callers used to
+    // filter before this function existed — falling back to plain
+    // buildFormation(players, side) here would silently re-run assignSlots'
+    // position-matching over the WHOLE roster and ignore LineupSelect's
+    // actual choice entirely (a real bug caught live: a bench player picked
+    // up here purely because their position happened to fill a gap, even
+    // though the human explicitly benched them). Filter to the confirmed
+    // starters first, matching what every other branch of this function
+    // already respects.
+    const startingSet = new Set(startingPlayerIds);
+    return buildFormation(players.filter((p) => startingSet.has(p.id)), side);
   }
 
   const startingSet = new Set(startingPlayerIds);

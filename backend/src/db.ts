@@ -251,12 +251,20 @@ function seedIfEmpty() {
   // higher (finishing headers / defensive clearances) than midfielders; the
   // GK's own heading is largely irrelevant to his job but still gets a
   // generic value for consistency. Starting points for playtesting.
+  // 7 players, matching formations.ts's FORMATION_7V7_DEFAULT shape
+  // (GK/DEF/DEF/MID/MID/MID/FWD) exactly — this squad has no bench concept
+  // (unlike a career roster, buildFormation just fields every player here),
+  // so it needs to exactly cover the default formation's slots, not just
+  // meet-or-exceed them: a 6-player squad against a 7-slot formation would
+  // leave a whole slot (and, worse, mis-slot a leftover player into it —
+  // see assignSlots' own fallback) short one pawn per side.
   const demoSquad = [
     { name: "Goalkeeper Silva", position: "GK", jersey_number: 1, pace: 40, stamina: 60, skill: 55, jumping: 70, shot_stopping: 75, reflexes: 72, heading: 40 },
     { name: "Defender Costa", position: "DEF", jersey_number: 2, pace: 55, stamina: 65, skill: 50, jumping: 55, shot_stopping: 20, reflexes: 30, heading: 60 },
     { name: "Defender Lima", position: "DEF", jersey_number: 3, pace: 50, stamina: 65, skill: 52, jumping: 50, shot_stopping: 20, reflexes: 30, heading: 58 },
     { name: "Midfielder Souza", position: "MID", jersey_number: 8, pace: 60, stamina: 70, skill: 60, jumping: 45, shot_stopping: 15, reflexes: 25, heading: 50 },
     { name: "Midfielder Alves", position: "MID", jersey_number: 10, pace: 62, stamina: 68, skill: 65, jumping: 45, shot_stopping: 15, reflexes: 25, heading: 52 },
+    { name: "Midfielder Pereira", position: "MID", jersey_number: 6, pace: 58, stamina: 72, skill: 62, jumping: 45, shot_stopping: 15, reflexes: 25, heading: 50 },
     { name: "Striker Rocha", position: "FWD", jersey_number: 9, pace: 70, stamina: 60, skill: 58, jumping: 50, shot_stopping: 10, reflexes: 20, heading: 65 },
   ];
 

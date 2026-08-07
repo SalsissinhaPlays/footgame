@@ -79,6 +79,8 @@ export interface MatchSyncState {
   camera: { zoom: number; rotation: number; tilt: number; focusX: number; focusY: number };
   /** Team Management sandbox only (Game.tsx sets this to `mode === "solo" && !placingPawnSide`) — lets an existing pawn be picked up and dropped anywhere, bypassing the normal click-to-plan flow entirely. Never true in a real match. */
   pawnDragEnabled: boolean;
+  /** Defaults to true (every real match/sandbox mode omits this). The Formation Editor's static pitch has no ball at all — false there hides the sprite/shadow outright and skips updateBall's tween entirely, rather than just parking the ball off-screen (which still animated a visible tween into place on mount). */
+  showBall?: boolean;
 }
 
 export interface MatchCallbacks {
@@ -973,6 +975,13 @@ export class MatchScene extends Phaser.Scene {
 
   private updateBall() {
     if (!this.state) return;
+    if (this.state.showBall === false) {
+      this.ballShadow.setVisible(false);
+      this.ballSprite.setVisible(false);
+      return;
+    }
+    this.ballShadow.setVisible(true);
+    this.ballSprite.setVisible(true);
     const { ball, ballHeight } = this.state;
     const target = this.projector.toIso(ball.pos.x + 0.5, ball.pos.y + 0.5);
     const liftPx = BALL_GROUND_LIFT + this.projector.heightOffset(ballHeight);
