@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { fetchPlayers } from "../../game/api";
 import { createPlayer, deletePlayer, fetchSaveTeams, fetchTeamLineup, transferPlayer, updatePlayer } from "../../game/careerApi";
+import { GRID_COLS, GRID_ROWS } from "../../game/constants";
 import { FORMATION_7V7_DEFAULT } from "../../game/formations";
-import type { PlayerDTO, TeamDTO } from "../../game/types";
+import type { PlayerDTO, TeamDTO, Vec2 } from "../../game/types";
 import { FormationEditor } from "./FormationEditor";
 import type { EditorSlot } from "./FormationEditor";
 import "./career.css";
@@ -123,12 +124,33 @@ export function TeamManagement({ saveId, teamId, onBack }: Props) {
     setSlots((prev) => prev.map((s) => (s.playerId === playerId ? { ...s, playerId: null } : s)));
   }
 
+  // FORMATION_7V7_DEFAULT always has exactly one slot per position category
+  // (GK/DEF/MID/FWD), so this always finds a real match for any roster
+  // player's own position — the { x: GRID_COLS/2, y: GRID_ROWS/2 } fallback
+  // only exists to satisfy the type, never actually reached in practice.
+  function defaultPosFor(position: string): Vec2 {
+    const match = FORMATION_7V7_DEFAULT.slots.find((s) => s.position === position);
+    return match ? { ...match.pos } : { x: GRID_COLS / 2, y: GRID_ROWS / 2 };
+  }
+
   function fillNextOpenSlot(player: PlayerDTO) {
     setSlots((prev) => {
       const positionMatch = prev.findIndex((s) => s.playerId == null && s.position === player.position);
-      const index = positionMatch !== -1 ? positionMatch : prev.findIndex((s) => s.playerId == null);
-      if (index === -1) return prev; // no open slot — full squad already selected
-      return prev.map((s, i) => (i === index ? { ...s, playerId: player.id } : s));
+      if (positionMatch !== -1) {
+        return prev.map((s, i) => (i === positionMatch ? { ...s, playerId: player.id } : s));
+      }
+      const anyOpen = prev.findIndex((s) => s.playerId == null);
+      if (anyOpen === -1) return prev; // no open slot — full squad already selected
+      // No open slot matches this player's own position (e.g. every open
+      // slot left over from benching DEFs, but the incoming player is a
+      // FWD) — inheriting that slot's leftover position/coordinate landed
+      // the player nowhere near where they actually play, which is exactly
+      // what "random spots" looked like. Relabel the slot to the incoming
+      // player's real position and reposition to a sensible default for it
+      // instead of keeping the vacated occupant's stale position/coordinate.
+      return prev.map((s, i) =>
+        i === anyOpen ? { position: player.position, pos: defaultPosFor(player.position), playerId: player.id } : s
+      );
     });
   }
 

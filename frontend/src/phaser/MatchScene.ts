@@ -720,6 +720,14 @@ export class MatchScene extends Phaser.Scene {
     const g = this.radiusGfx;
     g.clear();
     if (!this.state) return;
+    // Every radius this draws is about ball-carrying mechanics (capture,
+    // tackle) that don't apply wherever there's no real ball — the Formation
+    // Editor sets `ball.pos` to a throwaway camera-focus coordinate (see its
+    // own MatchSyncState comment), which without this gate produced a
+    // phantom CAPTURE_RADIUS ring floating in open grass with no pawn or
+    // context near it, since this overlay ran unconditionally regardless of
+    // showBall.
+    if (this.state.showBall === false) return;
     const p = this.projector;
     const { pawns, ball } = this.state;
 

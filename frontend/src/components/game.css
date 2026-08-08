@@ -179,6 +179,12 @@
   opacity: 0.9;
 }
 
+.pawn-info-warning {
+  color: #ffca28;
+  opacity: 1;
+  font-weight: 600;
+}
+
 /* ---------- Top center: scoreboard ---------- */
 
 .scoreboard {

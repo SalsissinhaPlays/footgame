@@ -226,6 +226,26 @@ function pickPassTarget(carrier: Pawn, context: TeamContext, profile: TacticalPr
   return best ? { targetId: best.t.id, evaluation: best.evaluation } : null;
 }
 
+/**
+ * A throw-in taker must release the ball to a teammate, never dribble it in
+ * (see Game.tsx's own movement-lock enforcement for the human side) — the
+ * normal pickPassTarget above requires a teammate MEANINGFULLY AHEAD of the
+ * carrier, which a taker standing on the touchline often has none of (a
+ * real throw-in is very often played square or even slightly backward to
+ * whoever's free). Drops that advancement requirement, keeping only the
+ * clear-lane/risk checks, and prefers the nearest qualifying teammate
+ * (mirroring a real short throw) rather than the most advanced one.
+ */
+function pickThrowInPassTarget(carrier: Pawn, context: TeamContext, profile: TacticalProfile): { targetId: string; evaluation: KickEvaluation } | null {
+  const candidates = context.teammates
+    .filter((t) => t.id !== carrier.id && t.player.position !== "GK")
+    .map((t) => ({ t, evaluation: evaluateKick(carrier, t.pos, "pass", context.opponents, profile) }))
+    .filter((c): c is { t: Pawn; evaluation: KickEvaluation } => c.evaluation !== null)
+    .sort((a, b) => distance(a.t.pos, carrier.pos) - distance(b.t.pos, carrier.pos));
+  const best = candidates[0];
+  return best ? { targetId: best.t.id, evaluation: best.evaluation } : null;
+}
+
 /** A cross only makes sense from a wide, advanced position, gated by the profile's crossBias, aimed at a teammate already in the danger area. */
 function pickCrossTarget(carrier: Pawn, context: TeamContext, profile: TacticalProfile): { targetId: string; aim: Vec2; evaluation: KickEvaluation } | null {
   if (profile.crossBias < CROSS_BIAS_THRESHOLD) return null;
@@ -257,7 +277,8 @@ function pickCrossTarget(carrier: Pawn, context: TeamContext, profile: TacticalP
 function decideCarrierIntent(
   carrier: Pawn,
   context: TeamContext,
-  profile: TacticalProfile
+  profile: TacticalProfile,
+  justTookThrowIn = false
 ): { intent: PawnIntent; designatedTargetId: string | null } {
   const shot = pickShotAimPoint(carrier, context, profile);
   if (shot) return { intent: { kind: "carrier_shoot", aim: shot.aim }, designatedTargetId: null };
@@ -272,6 +293,27 @@ function decideCarrierIntent(
 
   const pass = pickPassTarget(carrier, context, profile);
   if (pass) return { intent: { kind: "carrier_pass", targetId: pass.targetId }, designatedTargetId: pass.targetId };
+
+  if (justTookThrowIn) {
+    // A throw-in must be released via a pass, never dribbled — the same
+    // real-football rule Game.tsx enforces for the human side (see
+    // isMovementLockedThrowIn there). Falls back to a relaxed, no-advancement
+    // pass search, and if even that finds nobody, a guaranteed pass to
+    // whoever's nearest regardless of lane/risk — a player under pressure
+    // still gets rid of the ball rather than illegally standing frozen or
+    // dribbling. Only reaches carrier_dribble (below) in the practically
+    // unreachable case of zero outfield teammates.
+    const relaxed = pickThrowInPassTarget(carrier, context, profile);
+    if (relaxed) {
+      return { intent: { kind: "carrier_pass", targetId: relaxed.targetId }, designatedTargetId: relaxed.targetId };
+    }
+    const anyTeammate = context.teammates
+      .filter((t) => t.id !== carrier.id && t.player.position !== "GK")
+      .sort((a, b) => distance(a.pos, carrier.pos) - distance(b.pos, carrier.pos))[0];
+    if (anyTeammate) {
+      return { intent: { kind: "carrier_pass", targetId: anyTeammate.id }, designatedTargetId: anyTeammate.id };
+    }
+  }
 
   let thenKick: { aim: Vec2; kind: "shot" | "pass"; targetId?: string } | undefined;
   if (chargesFor(carrier.player) > 1) {
@@ -441,7 +483,7 @@ function decideLooseBallIntents(context: TeamContext): Map<string, PawnIntent> {
  * Strict three-way dispatch on ball state — no overlapping cases. The GK is
  * always handled separately, untouched by any of the three branches.
  */
-function decideTeamIntents(context: TeamContext, profile: TacticalProfile): Map<string, PawnIntent> {
+function decideTeamIntents(context: TeamContext, profile: TacticalProfile, justTookThrowIn = false): Map<string, PawnIntent> {
   const intents = new Map<string, PawnIntent>();
   if (context.gk) intents.set(context.gk.id, { kind: "gk" });
 
@@ -456,7 +498,7 @@ function decideTeamIntents(context: TeamContext, profile: TacticalProfile): Map<
   }
 
   const carrier = context.carrier!;
-  const { intent: carrierIntent, designatedTargetId } = decideCarrierIntent(carrier, context, profile);
+  const { intent: carrierIntent, designatedTargetId } = decideCarrierIntent(carrier, context, profile, justTookThrowIn);
   intents.set(carrier.id, carrierIntent);
   const designatedMeetPoint = carrierIntent.kind === "carrier_cross" ? carrierIntent.aim : null;
   for (const [id, intent] of decideAttackingIntents(context, profile, carrier.id, designatedTargetId, designatedMeetPoint)) {
@@ -686,10 +728,11 @@ export function planAiTurn(
   pawns: Pawn[],
   ball: Ball,
   aiSide: Side,
-  profile: TacticalProfile = DEFAULT_TACTICAL_PROFILE
+  profile: TacticalProfile = DEFAULT_TACTICAL_PROFILE,
+  justTookThrowIn = false
 ): Pawn[] {
   const context = assessSituation(pawns, ball, aiSide);
-  const intents = decideTeamIntents(context, profile);
+  const intents = decideTeamIntents(context, profile, justTookThrowIn);
   return pawns.map((p) =>
     p.side !== aiSide
       ? p

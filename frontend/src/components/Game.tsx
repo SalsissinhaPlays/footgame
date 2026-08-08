@@ -198,6 +198,20 @@ interface MatchState {
   resolving: boolean;
   /** Every identified goal this match, in order — accumulated across the whole match the same way `events` already is, not reset per turn. Reported to onCareerMatchEnd for top-scorer tracking (see careerApi.ts's recordResult). */
   scorers: GoalScorer[];
+  /**
+   * Set whenever the just-resolved turn's own resolution ended in a dead-ball
+   * award, `takerId` being whoever got snapped onto the restart spot —
+   * cleared (to null) by that same always-run setMatch whenever it doesn't,
+   * so this only ever reflects the IMMEDIATELY PRECEDING turn's outcome, not
+   * a stale one from several turns back. Read by the very next turn's
+   * planning (both the human's own action panel and the AI's planAiTurn
+   * call) to enforce "a throw-in must be released via a pass, never
+   * dribbled" — a real football rule with no prior engine representation.
+   * Untouched by resolveSetupTurn's own extended-setup branch (repositioning
+   * turns), so it correctly survives through to the first REAL turn after
+   * setup finishes, not just an immediate quick restart.
+   */
+  justRestarted: { type: DeadBallResult["type"]; side: Side; takerId: string } | null;
 }
 
 function initialMatchState(humanSide: Side): MatchState {
@@ -215,6 +229,7 @@ function initialMatchState(humanSide: Side): MatchState {
     events: [],
     resolving: false,
     scorers: [],
+    justRestarted: null,
   };
 }
 
@@ -647,6 +662,16 @@ export function Game({
 
   const selectedPawn = match.pawns.find((p) => p.id === selectedId) ?? null;
 
+  // A real football rule with no prior representation here: a throw-in must
+  // be released via a throw (a kick, in this game's terms), never carried —
+  // the taker can't dribble it in. Scoped to throw-ins specifically (not
+  // every restart type) per an explicit user request. See match.justRestarted's
+  // own doc comment for how this stays accurate exactly one turn, and the AI's
+  // matching enforcement in ai.ts's decideCarrierIntent (threaded through
+  // planAiTurn's justTookThrowIn parameter below).
+  const isMovementLockedThrowIn =
+    !!selectedPawn && match.justRestarted?.type === "throw_in" && match.justRestarted.takerId === selectedPawn.id;
+
   // A pawn's WHOLE-turn move budget — unchanged in total amount by chaining
   // waypoints, same as it always was for a single destination. Charges (see
   // resolve.ts's chargesFor) gate how many separate ACTIONS (movement legs
@@ -764,7 +789,12 @@ export function Game({
       return;
     }
     if (pawn.side !== match.controllingSide) return;
-    setKickMode(false);
+    // A throw-in taker can't be in Move mode at all (see
+    // isMovementLockedThrowIn) — start them straight in Kick mode instead of
+    // the usual Move default, so there's no dead click needed to discover
+    // Move is unavailable.
+    const isTaker = match.justRestarted?.type === "throw_in" && match.justRestarted.takerId === pawn.id;
+    setKickMode(isTaker);
     setKickLoft(false);
     setKickKind("pass");
     setTackleMode(false);
@@ -878,6 +908,11 @@ export function Game({
     // extends from wherever the chain currently ends, not from the pawn's
     // real position — that's what lets repeated clicks keep chaining rather
     // than always replacing a single destination.
+    // A throw-in taker can't queue any movement leg at all (see
+    // isMovementLockedThrowIn) — this is a defensive backstop for the "Move"
+    // button being disabled/kickMode being force-set on selection above, not
+    // the only thing enforcing it.
+    if (isMovementLockedThrowIn) return;
     const steps = selectedPawn.plannedSteps;
 
     if (euclideanDistance(chainEnd, point) < CANCEL_CLICK_EPS) {
@@ -1264,23 +1299,30 @@ export function Game({
         ball: { pos: BALL_START },
         ballHeight: 0,
       }));
-    } else if (deadBall) {
+    }
+    // Whoever gets snapped onto the restart spot below is the taker — computed
+    // once here (not inside the setMatch updater) so the SAME pawn id can also
+    // seed match.justRestarted, further down, for the movement-lock check.
+    let restartTakerId: string | null = null;
+    if (deadBall) {
       // Only the ball and the single pawn taking the restart move — everyone
       // else stays exactly where the run of play left them, unlike a goal's
       // full formation reset.
-      setMatch((prev) => {
-        const eligible = prev.pawns.filter((p) => p.side === deadBall.side);
-        const pawns =
-          eligible.length === 0
-            ? prev.pawns
-            : (() => {
-                const nearest = eligible.reduce((best, p) =>
-                  euclideanDistance(p.pos, deadBall.spot) < euclideanDistance(best.pos, deadBall.spot) ? p : best
-                );
-                return prev.pawns.map((p) => (p.id === nearest.id ? { ...p, pos: { ...deadBall.spot } } : p));
-              })();
-        return { ...prev, ball: { pos: deadBall.spot }, ballHeight: 0, pawns };
-      });
+      const eligible = prevPawns.filter((p) => p.side === deadBall.side);
+      if (eligible.length > 0) {
+        const nearest = eligible.reduce((best, p) =>
+          euclideanDistance(p.pos, deadBall.spot) < euclideanDistance(best.pos, deadBall.spot) ? p : best
+        );
+        restartTakerId = nearest.id;
+      }
+      setMatch((prev) => ({
+        ...prev,
+        ball: { pos: deadBall.spot },
+        ballHeight: 0,
+        pawns: restartTakerId
+          ? prev.pawns.map((p) => (p.id === restartTakerId ? { ...p, pos: { ...deadBall.spot } } : p))
+          : prev.pawns,
+      }));
 
       // Only the restarting side gets a say in quick-vs-extended — no human
       // to ask when it falls to an AI-controlled or never-planned (solo away)
@@ -1301,6 +1343,7 @@ export function Game({
       readySides: new Set(),
       controllingSide: humanSide,
       resolving: false,
+      justRestarted: deadBall && restartTakerId ? { type: deadBall.type, side: deadBall.side, takerId: restartTakerId } : null,
     }));
   }
 
@@ -1378,8 +1421,14 @@ export function Game({
     setPickingMarkTarget(false);
     setPlacingPawnSide(null);
 
+    // Mirrors isMovementLockedThrowIn's own check, but for whichever side the
+    // AI controls — true only for the one turn immediately following the
+    // AI's own throw-in award, same "must pass, can't dribble" rule the
+    // human's own action panel enforces above.
+    const aiJustTookThrowIn = match.justRestarted?.type === "throw_in" && match.justRestarted.side === aiSide;
+
     if (mode === "ai") {
-      const withAiMoves = planAiTurn(match.pawns, match.ball, aiSide, aiTacticalProfile);
+      const withAiMoves = planAiTurn(match.pawns, match.ball, aiSide, aiTacticalProfile, aiJustTookThrowIn);
       await resolveWithPawns(withAiMoves);
       return;
     }
@@ -1390,7 +1439,9 @@ export function Game({
       // the player wants to see how their custom roster actually plays
       // against the AI instead of just standing still. Solo never sets
       // humanSide, so aiSide is always "away" here, unchanged from before.
-      const pawnsForTurn = awayAiEnabled ? planAiTurn(match.pawns, match.ball, aiSide, aiTacticalProfile) : match.pawns;
+      const pawnsForTurn = awayAiEnabled
+        ? planAiTurn(match.pawns, match.ball, aiSide, aiTacticalProfile, aiJustTookThrowIn)
+        : match.pawns;
       await resolveWithPawns(pawnsForTurn);
       return;
     }
@@ -1465,6 +1516,9 @@ export function Game({
                 <div className={`pawn-info-name ${selectedPawn.side}`}>
                   #{selectedPawn.player.jersey_number} {selectedPawn.player.name}
                 </div>
+                {isMovementLockedThrowIn && (
+                  <div className="pawn-info-row pawn-info-warning">Throw-in — must pass, can't run with it</div>
+                )}
                 <div className="pawn-info-row">Stance: {stanceLabel(selectedPawn.stance)}</div>
                 <div className="pawn-info-row">
                   Charges: {chargesRemaining}/{totalCharges}
@@ -1729,7 +1783,13 @@ export function Game({
             {selectedPawn && (
               <div className="hud-panel action-panel">
                 <div className="action-row">
-                  <button type="button" className={!kickMode ? "active" : ""} onClick={() => setKickMode(false)}>
+                  <button
+                    type="button"
+                    className={!kickMode ? "active" : ""}
+                    disabled={isMovementLockedThrowIn}
+                    title={isMovementLockedThrowIn ? "A throw-in must be passed, not carried" : undefined}
+                    onClick={() => setKickMode(false)}
+                  >
                     Move
                   </button>
                   <button
