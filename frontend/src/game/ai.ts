@@ -160,7 +160,7 @@ type PawnIntent =
   | { kind: "man_mark"; targetId: string }
   | { kind: "cover_passing"; laneTarget: Vec2 }
   | { kind: "expect_cross_defensively" }
-  | { kind: "hold_shape" }
+  | { kind: "hold_shape"; laneIndex: number; laneCount: number }
   | { kind: "support_attack"; expectingHeader: boolean; laneIndex: number; laneCount: number; meetPoint?: Vec2 }
   | { kind: "support_hold" }
   | { kind: "chase_loose_ball" }
@@ -368,9 +368,20 @@ function decideDefensiveIntents(context: TeamContext, profile: TacticalProfile):
     }
   }
 
-  for (const p of outfield) {
-    if (!assigned.has(p.id)) intents.set(p.id, { kind: "hold_shape" });
-  }
+  // Everyone left unassigned holds the defensive line — spread across
+  // GRID_ROWS by lane (same laneIndex/laneCount shape decideAttackingIntents
+  // already uses for support runs) so a sustained turn-after-turn shift
+  // toward the ball's side (defensiveShapeTarget below) can't converge
+  // multiple defenders onto the same spot, which is exactly what happened
+  // when it blended from each pawn's own drifting position instead of a
+  // stable per-lane anchor: with a parked ball (e.g. an attacker holding
+  // possession near a corner for several turns), every unassigned
+  // defender's target crept 20%-per-turn closer to the SAME ball.y,
+  // geometrically converging them into a single cluster.
+  const holdShapePawns = outfield.filter((p) => !assigned.has(p.id));
+  holdShapePawns.forEach((p, laneIndex) => {
+    intents.set(p.id, { kind: "hold_shape", laneIndex, laneCount: holdShapePawns.length });
+  });
   return intents;
 }
 
@@ -417,10 +428,11 @@ function decideLooseBallIntents(context: TeamContext): Map<string, PawnIntent> {
   const intents = new Map<string, PawnIntent>();
   const outfield = context.teammates.filter((p) => p.player.position !== "GK");
   const sorted = [...outfield].sort((a, b) => distance(a.pos, context.ball.pos) - distance(b.pos, context.ball.pos));
+  const holdShapePawns = sorted.slice(2);
   sorted.forEach((pawn, index) => {
     if (index === 0) intents.set(pawn.id, { kind: "chase_loose_ball" });
     else if (index === 1) intents.set(pawn.id, { kind: "cover_loose_ball" });
-    else intents.set(pawn.id, { kind: "hold_shape" });
+    else intents.set(pawn.id, { kind: "hold_shape", laneIndex: index - 2, laneCount: holdShapePawns.length });
   });
   return intents;
 }
@@ -500,10 +512,28 @@ function gkTarget(gk: Pawn, ball: Ball): Vec2 {
   return { x, y: targetY };
 }
 
-/** A real defensive line: depth interpolated between our own goal and halfway by the profile, shifted toward the ball's side. */
-function defensiveShapeTarget(pawn: Pawn, context: TeamContext, profile: TacticalProfile): Vec2 {
+/**
+ * A real defensive line: depth interpolated between our own goal and halfway
+ * by the profile, shifted toward the ball's side. `anchorY` is spread evenly
+ * across the pitch's width by lane (laneIndex/laneCount — same pattern
+ * supportingRunTarget already uses for attacking runs), deliberately NOT
+ * blended from the pawn's own current position the way an earlier version
+ * did: that version recomputed `y = pawn.pos.y + (ball.y - pawn.y) *
+ * SHAPE_BALL_SIDE_SHIFT_FRACTION` fresh every turn from wherever the pawn
+ * had already drifted to, so a ball parked in one spot for several turns
+ * (an attacker holding possession near a corner, an extended corner setup)
+ * pulled EVERY unassigned defender 20%-per-turn closer to that same ball.y,
+ * geometrically converging them all onto the same point regardless of their
+ * original spread — a real, reported bug (three defenders visibly bunched
+ * in one corner, inert, until a shot forced a different contest). Anchoring
+ * to a fixed per-lane slot instead means the shift still happens (the line
+ * genuinely leans toward the ball's side) but never collapses lanes into
+ * each other, since each lane's anchor is independent of live pawn position.
+ */
+function defensiveShapeTarget(context: TeamContext, profile: TacticalProfile, laneIndex: number, laneCount: number): Vec2 {
   const lineX = context.ownGoal.x + (context.halfwayX - context.ownGoal.x) * profile.defensiveLineDepthFrac;
-  const y = pawn.pos.y + (context.ball.pos.y - pawn.pos.y) * SHAPE_BALL_SIDE_SHIFT_FRACTION;
+  const anchorY = laneCount > 0 ? ((laneIndex + 1) / (laneCount + 1)) * GRID_ROWS : GRID_ROWS / 2;
+  const y = anchorY + (context.ball.pos.y - anchorY) * SHAPE_BALL_SIDE_SHIFT_FRACTION;
   return { x: lineX, y };
 }
 
@@ -600,7 +630,7 @@ function realizePawnIntent(pawn: Pawn, intent: PawnIntent, context: TeamContext,
       // close (a routine shuffle), but a pawn caught well out of position
       // after a turnover needs the room to actually cover that distance,
       // sprinting if it clears the threshold.
-      const target = defensiveShapeTarget(pawn, context, profile);
+      const target = defensiveShapeTarget(context, profile, intent.laneIndex, intent.laneCount);
       const rawDist = distance(pawn.pos, target);
       const sprint = maybeSprint(pawn, rawDist, profile);
       const steps = buildChain(pawn.pos, [{ pos: target }], pawn.player, sprint);
@@ -661,6 +691,8 @@ export function planAiTurn(
   const context = assessSituation(pawns, ball, aiSide);
   const intents = decideTeamIntents(context, profile);
   return pawns.map((p) =>
-    p.side !== aiSide ? p : realizePawnIntent(p, intents.get(p.id) ?? { kind: "hold_shape" }, context, profile)
+    p.side !== aiSide
+      ? p
+      : realizePawnIntent(p, intents.get(p.id) ?? { kind: "hold_shape", laneIndex: 0, laneCount: 1 }, context, profile)
   );
 }

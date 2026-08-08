@@ -47,6 +47,16 @@ export const GOAL_ROW_MAX = 23;
 
 export const BALL_START = { x: Math.floor(GRID_COLS / 2), y: Math.floor(GRID_ROWS / 2) };
 
+// Real football requires the non-kicking side to stay outside the center
+// circle until a kickoff is taken — without an analogous rule here, the
+// default formation's own forward slot (see formations.ts) sits only ~3-4
+// units from BALL_START on EITHER side, so even a correctly-resolved coin
+// toss (Game.tsx) looked like a neutral 50/50 scramble: the losing side's
+// forward was still standing right next to the ball. applyKickoff
+// (formation.ts) pushes any opposing pawn caught inside this radius
+// straight back until it clears it.
+export const KICKOFF_EXCLUSION_RADIUS = 8;
+
 // Pawns (and the ball) may step past the touchlines/goal lines into the
 // out-of-bounds apron on any side, including inside the goal net itself.
 export const OOB_CELLS = 4;

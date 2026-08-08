@@ -82,7 +82,17 @@ export function LineupSelect({ teamId, opponentName, onBack, onConfirm }: Props)
         <p>Loading…</p>
       ) : (
         <ul className="career-list">
-          {players.map((p) => {
+          {/* Starters sort to the top (same convention TeamManagement's roster list already
+              uses), so the 7/7 picked for this match are the first thing seen instead of
+              being scattered through jersey-number order. */}
+          {[...players]
+            .sort((a, b) => {
+              const aStarting = selected.has(a.id) ? 0 : 1;
+              const bStarting = selected.has(b.id) ? 0 : 1;
+              if (aStarting !== bStarting) return aStarting - bStarting;
+              return a.jersey_number - b.jersey_number;
+            })
+            .map((p) => {
             const isSelected = selected.has(p.id);
             const disableToggle = !isSelected && selected.size >= STARTERS_NEEDED;
             return (

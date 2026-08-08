@@ -1,10 +1,14 @@
-import { GRID_COLS } from "./constants";
+import { BALL_START, GRID_COLS, KICKOFF_EXCLUSION_RADIUS } from "./constants";
 import { FORMATION_7V7_DEFAULT } from "./formations";
 import type { Formation, FormationSlot, LineupSlot } from "./formations";
 import type { Pawn, PlayerDTO, Side, Vec2 } from "./types";
 
 function mirrorX(x: number): number {
   return GRID_COLS - 1 - x;
+}
+
+function dist(a: Vec2, b: Vec2): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 /**
@@ -120,4 +124,51 @@ export function buildFormationFromLineup(
   const assignedNewcomers = assignSlots(newcomers, { slots: vacated });
 
   return toPawns([...kept, ...assignedNewcomers], side);
+}
+
+/**
+ * Places a kickoff for `kickingSide` — used both for the match's true
+ * opening kickoff (after the coin toss, see Game.tsx) and every post-goal
+ * restart (the conceding side always kicks off, same as real football).
+ * The kicking side's most advanced player is found by `player.position ===
+ * "FWD"`, NOT by array position — a plain `buildFormation`'s output
+ * happens to end with its FWD slot (assignSlots iterates
+ * FORMATION_7V7_DEFAULT.slots in order), but `buildFormationFromLineup`'s
+ * kept+newcomers concatenation makes no such guarantee, so indexing "the
+ * last pawn" silently teleported the wrong player onto the ball for any
+ * team with a saved base lineup. Falls back to whichever of the kicking
+ * side's own pawns is nearest the ball if the roster has no FWD at all,
+ * mirroring assignSlots' own any-player-left fallback for a missing
+ * position.
+ *
+ * Any OPPOSING pawn caught inside KICKOFF_EXCLUSION_RADIUS of the ball —
+ * in practice only ever that side's own FWD, given how close
+ * FORMATION_7V7_DEFAULT's forward slot already sits to center — is pushed
+ * straight back along the ball-to-pawn line until it clears the radius,
+ * so it's visually and mechanically unambiguous which side actually has
+ * the ball.
+ */
+export function applyKickoff(pawns: Pawn[], kickingSide: Side): Pawn[] {
+  const kickingPawns = pawns.filter((p) => p.side === kickingSide);
+  const kicker =
+    kickingPawns.find((p) => p.player.position === "FWD") ??
+    kickingPawns.reduce<Pawn | null>(
+      (closest, p) => (!closest || dist(p.pos, BALL_START) < dist(closest.pos, BALL_START) ? p : closest),
+      null
+    );
+
+  return pawns.map((p) => {
+    if (kicker && p.id === kicker.id) return { ...p, pos: { ...BALL_START } };
+    if (p.side === kickingSide) return p;
+    const d = dist(p.pos, BALL_START);
+    if (d === 0 || d >= KICKOFF_EXCLUSION_RADIUS) return p;
+    const scale = KICKOFF_EXCLUSION_RADIUS / d;
+    return {
+      ...p,
+      pos: {
+        x: BALL_START.x + (p.pos.x - BALL_START.x) * scale,
+        y: BALL_START.y + (p.pos.y - BALL_START.y) * scale,
+      },
+    };
+  });
 }

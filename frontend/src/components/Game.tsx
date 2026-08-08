@@ -19,7 +19,7 @@ import {
   TACKLE_COOLDOWN_TURNS,
 } from "../game/constants";
 import { planAiTurn } from "../game/ai";
-import { buildFormation, buildFormationFromLineup } from "../game/formation";
+import { applyKickoff, buildFormation, buildFormationFromLineup } from "../game/formation";
 import { createProjector, TILT_DEFAULT, TILT_MAX, TILT_MIN, VIEW_H, VIEW_W } from "../game/iso";
 import { chargesFor, resolveTurn } from "../game/resolve";
 import type { DeadBallResult, GoalScorer } from "../game/resolve";
@@ -475,21 +475,15 @@ export function Game({
       // both sides' formation forwards sit well outside that radius (a
       // symmetric, neutral kickoff), so without this every opening kickoff
       // would just be an unclaimed scramble every pawn is equally far from.
-      // The coin-toss winner's central forward (the formation's last slot —
-      // FWD in FORMATION_7V7_DEFAULT) is teleported exactly onto the ball,
-      // matching how a real kickoff always starts in someone's possession.
-      // Deliberately scoped to this one initial load only — post-goal
-      // restarts (kickoffFormation, below) are untouched and stay a neutral
-      // scramble; a coin toss is a pre-match ritual, not a per-goal one.
+      // applyKickoff (formation.ts) places the coin-toss winner's forward
+      // exactly on the ball and pushes the other side's forward back
+      // outside KICKOFF_EXCLUSION_RADIUS, matching how a real kickoff always
+      // starts in someone's clear, unambiguous possession — post-goal
+      // restarts use the same helper too, see the goal-handling block below.
       const kickoffSide: Side = Math.random() < 0.5 ? "home" : "away";
-      const placeOnBall = (formation: Pawn[]): Pawn[] =>
-        formation.map((p, i) => (i === formation.length - 1 ? { ...p, pos: { ...BALL_START } } : p));
       setMatch((prev) => ({
         ...prev,
-        pawns: [
-          ...(kickoffSide === "home" ? placeOnBall(homeFormation) : homeFormation),
-          ...(kickoffSide === "away" ? placeOnBall(awayFormation) : awayFormation),
-        ],
+        pawns: applyKickoff([...homeFormation, ...awayFormation], kickoffSide),
       }));
       setLoading(false);
     }
@@ -1252,13 +1246,21 @@ export function Game({
         scorers: scorer ? [...prev.scorers, scorer] : prev.scorers,
       }));
       await sleep(600);
+      // The side that conceded always retakes the kickoff — same
+      // applyKickoff helper the true opening coin toss uses (see the
+      // load effect above), so the restart is exactly as unambiguous:
+      // the conceding side's forward is placed on the ball, the scoring
+      // side's forward is pushed back outside KICKOFF_EXCLUSION_RADIUS,
+      // rather than the previous "neutral scramble" both sides' formation
+      // forwards naturally sat close enough to the ball to look contested.
+      const concedingSide: Side = goal === "home" ? "away" : "home";
       setMatch((prev) => ({
         ...prev,
         // The Team Management sandbox's custom roster (extra/edited/moved
         // pawns) would otherwise be silently wiped by the standard 6-pawn
         // kickoff reset the instant anyone scores — skip it here and just
         // recenter the ball, leaving the roster exactly as the player built it.
-        pawns: mode === "solo" ? prev.pawns : kickoffFormation(prev.pawns),
+        pawns: mode === "solo" ? prev.pawns : applyKickoff(kickoffFormation(prev.pawns), concedingSide),
         ball: { pos: BALL_START },
         ballHeight: 0,
       }));
